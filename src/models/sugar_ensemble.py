@@ -171,4 +171,3 @@ class SuGAREnsemble(nn.Module):
         reconstructed = batch_reconstruct_from_fragment_edges(batch_data, fragment_edge_mask)
 
         return reconstructed
-

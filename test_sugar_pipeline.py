@@ -10,9 +10,6 @@ from rdkit import Chem
 from rdkit.Chem.Draw import rdMolDraw2D
 
 # Pipeline specific imports
-from src.data.dataloader import load_processed_split
-from src.data.pyg_batch import batch_molecules
-from src.models.fragment_graph import build_fragment_graph_batch
 from src.models.sugar_ensemble import SuGAREnsemble
 
 # =====================================================================
@@ -249,7 +246,6 @@ def draw_reconstructed_subgraph_atoms(mol_data, save_path, selected_mask):
 # RUNTIME PIPELINE EXECUTION
 # =====================================================================
 def test_pipeline(data_path, num_samples=2):
-    """Runs data parsing, model evaluations, and serializes the 3 required visual assets."""
     print("=" * 80)
     print("SuGAR PIPELINE VISUALIZATION ROUTINE")
     print("=" * 80)
@@ -259,58 +255,56 @@ def test_pipeline(data_path, num_samples=2):
 
     # 1. Load data
     print("\n1. Loading processed molecular data...")
-    payload = load_processed_split(data_path)
+    payload = torch.load(data_path, weights_only=False) # Updated from load_processed_split
     molecules = payload["molecule_data"][:num_samples]
 
-    # 2. Pre-batch step 1 visuals
-    print("2. Generating Initial Fragment Assignments (Visualization 1)...")
+    # 2. Visualize Initial Assignments
+    print("2. Generating Initial Fragment Assignments...")
     for idx, mol_data in enumerate(molecules):
         draw_initial_atom_graph_with_fragments(mol_data, viz_dir / f"mol_{idx}_viz1_initial_atoms.png")
 
-    batch_data = batch_molecules(molecules)
-    fragment_batch = build_fragment_graph_batch(batch_data)
+    # 3. Create Batch
+    # Using the native PyG DataLoader / Batching mechanism
+    from torch_geometric.loader import DataLoader
+    loader = DataLoader(molecules, batch_size=num_samples, shuffle=False)
+    batch_data = next(iter(loader))
 
-    # 3. Model Build & Execution
-    print("3. Executing Forward Pass through SuGAR Ensemble...")
+    # 4. Model Build & Execution
+    print("3. Executing Forward Pass...")
     model = SuGAREnsemble(
         atom_feature_dim=batch_data.x.size(1),
-        fragment_feature_dim=fragment_batch.x.size(1),
+        fragment_feature_dim=batch_data.fragment_x_static.size(1),
         num_classes=2, num_gnn_layers=2, gnn_hidden_dim=64, edge_ratio=0.5, dropout=0.0,
     )
-
-    device = torch.device("cpu")
-    batch_data = batch_data.to(device)
-    model = model.to(device)
 
     with torch.no_grad():
         _, intermediates = model(batch_data, return_intermediates=True)
 
     fragment_edge_mask = intermediates["fragment_edge_masks"][0]
-    split_molecules = batch_data.to_data_list()
     
-    # 4. Generate remaining required visualization steps
-    print("4. Generating Edge Selection and Subgraph Reconstructions (Visualizations 2 & 3)...")
-    offset = 0
-    for idx, mol in enumerate(split_molecules):
-        if idx >= num_samples:
-            break
+    # 5. Generate Visualizations 2 & 3
+    print("4. Generating Edge Selection and Subgraph Reconstructions...")
+    
+    # Track edge offset for each molecule in the batch
+    edge_offset = 0
+    split_mols = batch_data.to_data_list()
+    
+    for idx, mol in enumerate(split_mols):
         num_edges = mol.fragment_edge_index.size(1)
-        local_mask = fragment_edge_mask[offset : offset + num_edges].cpu()
-        offset += num_edges
+        local_mask = fragment_edge_mask[edge_offset : edge_offset + num_edges]
+        edge_offset += num_edges
 
-        # Visualization 2: Pure fragment network showing GNN selection matrix highlights
+        # Visualization 2
         draw_fragment_graph_with_extracted_edges(
             mol, viz_dir / f"mol_{idx}_viz2_fragment_graph.png", local_mask
         )
 
-        # Visualization 3: Backmapped atom space removing everything outside GNN selection
+        # Visualization 3
         draw_reconstructed_subgraph_atoms(
             mol, viz_dir / f"mol_{idx}_viz3_reconstructed_atoms.png", local_mask
         )
 
-    print("\n" + "=" * 80)
-    print(f"PIPELINE COMPLETED - Visual assets stored in: {viz_dir.resolve()}")
-    print("=" * 80)
+    print(f"\nVisual assets stored in: {viz_dir.resolve()}")
 
 
 if __name__ == "__main__":

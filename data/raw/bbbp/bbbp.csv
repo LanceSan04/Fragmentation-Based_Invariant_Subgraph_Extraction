@@ -1,0 +1,5 @@
+molecule_id,smiles,label,split,environment
+fake_bbbp_ester,CCOC(=O)C,1,train,fake_train
+fake_bbbp_benzene,c1ccccc1,0,train,fake_train
+fake_bbbp_ethane,CC,1,valid,fake_valid
+fake_bbbp_helium,[He],0,test,fake_test
