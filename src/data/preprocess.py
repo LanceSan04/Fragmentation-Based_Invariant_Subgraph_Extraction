@@ -16,6 +16,7 @@ from pathlib import Path
 
 import torch
 import yaml
+import random
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -81,7 +82,7 @@ def process_record(record, config):
     if smiles is None:
         raise ValueError(f"Record is missing SMILES key {smiles_key!r}: {record!r}")
 
-    _debug_print(config, f"Processing molecule: {smiles}")
+    # _debug_print(config, f"Processing molecule: {smiles}")
     label = _record_get(record, label_key, None)
     label = _coerce_label(label)
     environment_or_group = _record_get(record, environment_key, None)
@@ -96,14 +97,14 @@ def process_record(record, config):
         fragmenter=fragmenter,
         pooling=_config_get(config, "pooling", "mean_atom_and_internal_bond"),
     )
-    _debug_print(
-        config,
-        "Built molecule "
-        f"{smiles}: atoms={example.atom_x.size(0)}, "
-        f"bonds={example.bond_attr.size(0)}, "
-        f"fragments={example.fragment_x_static.size(0)}, "
-        f"fragment_edges={example.fragment_edge_index.size(1)}",
-    )
+    # _debug_print(
+    #    config,
+    #    "Built molecule "
+    #    f"{smiles}: atoms={example.atom_x.size(0)}, "
+    #    f"bonds={example.bond_attr.size(0)}, "
+    #    f"fragments={example.fragment_x_static.size(0)}, "
+    #    f"fragment_edges={example.fragment_edge_index.size(1)}",
+    #)
     return example
 
 
@@ -115,7 +116,7 @@ def process_split(records, config):
 
     for index, record in enumerate(records):
         try:
-            _debug_print(config, f"Record {index + 1}/{len(records)}")
+            # _debug_print(config, f"Record {index + 1}/{len(records)}")
             examples.append(process_record(record, config))
         except Exception as exc:
             if strict:
@@ -180,12 +181,31 @@ def run_preprocessing(config):
     if split_records is None:
         split_key = _config_get(config, "split_key", "split")
         records = load_raw_records(config)
-        split_records = {"all": records}
-        if records and isinstance(records[0], dict) and split_key in records[0]:
-            split_records = {}
-            for record in records:
-                split_name = str(record[split_key])
-                split_records.setdefault(split_name, []).append(record)
+        if records and isinstance(records[0], dict) and split_key not in records[0]:
+            train_ratio = _config_get(config, "train_ratio", 0.8)
+            valid_ratio = _config_get(config, "valid_ratio", 0.1)
+            
+            _debug_print(config, f"Splitting: Train={train_ratio}, Valid={valid_ratio}, Test={1.0 - train_ratio - valid_ratio:.2f}")
+            
+            random.seed(_config_get(config, "seed", 42)) # Allow setting seed in config
+            random.shuffle(records)
+            
+            n = len(records)
+            train_end = int(n * train_ratio)
+            valid_end = int(n * (train_ratio + valid_ratio))
+            
+            split_records = {
+                "train": records[:train_end],
+                "valid": records[train_end:valid_end],
+                "test": records[valid_end:]
+            }
+        else:
+            split_records = {"all": records}
+            if records and isinstance(records[0], dict) and split_key in records[0]:
+                split_records = {}
+                for record in records:
+                    split_name = str(record[split_key])
+                    split_records.setdefault(split_name, []).append(record)
 
     outputs = {}
     failures = {}
