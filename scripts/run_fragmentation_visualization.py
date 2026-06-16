@@ -1,8 +1,8 @@
 """Run molecular fragmentation on one molecule and save a visual summary.
 
 Example:
-    python scripts/run_group_graph_visualization.py --smiles "CCOC(=O)C"
-    python scripts/run_group_graph_visualization.py --smiles "CCOC(=O)C" --fragmentation brics
+    python scripts/run_fragmentation_visualization.py --smiles "CCOC(=O)C"
+    python scripts/run_fragmentation_visualization.py --smiles "CCOC(=O)C" --fragmentation brics
 """
 
 import argparse
@@ -72,7 +72,7 @@ def parse_args():
     )
     parser.add_argument(
         "--output-dir",
-        default="scripts/group_graph_visuals/fragment_visualizations",
+        default="results/fragment_visualizations",
         help="Directory for the PNG and text summary.",
     )
     parser.add_argument(
