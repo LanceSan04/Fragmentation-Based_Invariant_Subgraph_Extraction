@@ -1,7 +1,8 @@
-"""Run Group Graph fragmentation on one molecule and save a visual summary.
+"""Run molecular fragmentation on one molecule and save a visual summary.
 
 Example:
     python scripts/run_group_graph_visualization.py --smiles "CCOC(=O)C"
+    python scripts/run_group_graph_visualization.py --smiles "CCOC(=O)C" --fragmentation brics
 """
 
 import argparse
@@ -16,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.fragmentation.group_graph import GroupGraphFragmenter
+from src.fragmentation import FRAGMENTERS, build_fragmenter
 
 
 FRAGMENT_COLORS = [
@@ -37,15 +38,17 @@ def main():
     if mol is None:
         raise ValueError(f"RDKit could not parse SMILES: {args.smiles!r}")
 
-    result = GroupGraphFragmenter().fragment(mol)
+    fragmenter = build_fragmenter(args.fragmentation)
+    result = fragmenter.fragment(mol)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     stem = safe_filename(args.smiles)
-    image_path = output_dir / f"{stem}_group_graph_fragments.png"
-    summary_path = output_dir / f"{stem}_group_graph_fragments.txt"
+    fragmentation_name = safe_filename(args.fragmentation)
+    image_path = output_dir / f"{stem}_{fragmentation_name}_fragments.png"
+    summary_path = output_dir / f"{stem}_{fragmentation_name}_fragments.txt"
 
-    lines = build_summary_lines(mol, result, args.smiles)
+    lines = build_summary_lines(mol, result, args.smiles, args.fragmentation)
     summary_text = "\n".join(lines)
     summary_path.write_text(summary_text + "\n", encoding="utf-8")
 
@@ -60,7 +63,7 @@ def main():
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Visualize Group Graph fragments for one SMILES string."
+        description="Visualize molecular fragments for one SMILES string."
     )
     parser.add_argument(
         "--smiles",
@@ -72,12 +75,19 @@ def parse_args():
         default="scripts/group_graph_visuals/fragment_visualizations",
         help="Directory for the PNG and text summary.",
     )
+    parser.add_argument(
+        "--fragmentation",
+        default="group_graph",
+        choices=sorted(FRAGMENTERS),
+        help="Fragmentation method to visualize. Default: group_graph",
+    )
     return parser.parse_args()
 
 
-def build_summary_lines(mol, result, smiles):
+def build_summary_lines(mol, result, smiles, fragmentation):
     lines = [
-        "Group Graph Fragmentation Run",
+        "Fragmentation Run",
+        f"Fragmentation method: {fragmentation}",
         f"SMILES: {smiles}",
         f"Canonical SMILES: {Chem.MolToSmiles(mol, isomericSmiles=True)}",
         f"Atoms: {mol.GetNumAtoms()}",

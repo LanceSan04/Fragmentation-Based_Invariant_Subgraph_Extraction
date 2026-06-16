@@ -14,18 +14,6 @@ def selected_fragment_nodes(fragment_edge_index, selected_edge_mask):
     return torch.unique(selected_edges.reshape(-1), sorted=True)
 
 
-def selected_atom_nodes(fragment_to_atoms, selected_fragments):
-    """Collect every original atom contained by selected fragments."""
-    atoms = []
-    selected = set(torch.as_tensor(selected_fragments, dtype=torch.long).tolist())
-    for fragment_id, fragment_atoms in enumerate(fragment_to_atoms):
-        if fragment_id in selected:
-            atoms.extend(torch.as_tensor(fragment_atoms, dtype=torch.long).tolist())
-    if not atoms:
-        return torch.empty((0,), dtype=torch.long)
-    return torch.tensor(sorted(set(atoms)), dtype=torch.long)
-
-
 def reconstruct_atom_graph(
     molecule_data,
     selected_fragment_edge_mask,

@@ -3,12 +3,22 @@
 import torch
 import torch.nn as nn
 
+from src.data.atom_graph import ATOM_FDIM, BOND_FDIM
+
+
+POOLING_MEAN_ATOM_AND_INTERNAL_BOND = "mean_atom_and_internal_bond"
+SUPPORTED_POOLING_MODES = {POOLING_MEAN_ATOM_AND_INTERNAL_BOND}
+FRAGMENT_FEATURE_DIM = ATOM_FDIM + BOND_FDIM + 2
+
 
 class FragmentPooler(nn.Module):
     """Create initial supernode vectors for the fragment-level GNN."""
 
-    def __init__(self, pooling="mean", include_size_features=True):
+    def __init__(self, pooling=POOLING_MEAN_ATOM_AND_INTERNAL_BOND, include_size_features=True):
         super().__init__()
+        if pooling not in SUPPORTED_POOLING_MODES:
+            available = ", ".join(sorted(SUPPORTED_POOLING_MODES))
+            raise ValueError(f"Unsupported fragment pooling {pooling!r}. Available: {available}")
         self.pooling = pooling
         self.include_size_features = include_size_features
 

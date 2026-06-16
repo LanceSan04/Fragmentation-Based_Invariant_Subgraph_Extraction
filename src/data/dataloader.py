@@ -183,6 +183,7 @@ def _expected_metadata(config):
         "pooling",
         "atom_feature_dim",
         "bond_feature_dim",
+        "fragment_feature_dim",
     ]
     metadata = {}
     for key in keys:

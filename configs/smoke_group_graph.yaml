@@ -37,6 +37,7 @@ pooling: mean_atom_and_internal_bond
 # Current fragment vectors are 149 dims: 133 atom + 14 bond + 2 size features.
 atom_feature_dim: 133
 bond_feature_dim: 14
+fragment_feature_dim: 149
 
 # Output directory for generated smoke .pt files.
 # preprocess.py will write:

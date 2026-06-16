@@ -110,6 +110,7 @@ def build_molecule_example(
     environment_or_group=None,
     molecule_id=None,
     fragmenter=None,
+    pooling="mean_atom_and_internal_bond",
 ):
     """Construct a MoleculeExample from raw molecular inputs."""
     mol = Chem.MolFromSmiles(smiles)
@@ -121,7 +122,7 @@ def build_molecule_example(
     fragmentation = fragmenter.fragment(mol)
     fragment_edge_attr = build_fragment_edge_features(mol, fragmentation)
 
-    pooler = FragmentPooler()
+    pooler = FragmentPooler(pooling=pooling)
     fragment_x_static = pooler(
         atom_graph.atom_x,
         atom_graph.bond_index,

@@ -21,10 +21,12 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.data.atom_graph import ATOM_FDIM, BOND_FDIM
 from src.data.molecule_example import build_molecule_example
 from src.data.pyg_batch import molecule_example_to_data
 from src.data.dataloader import build_split_dataloaders, validate_dataloader_batch
 from src.fragmentation import build_fragmenter
+from src.models.fragment_pooler import FRAGMENT_FEATURE_DIM
 
 
 def load_raw_records(config):
@@ -92,6 +94,7 @@ def process_record(record, config):
         environment_or_group=environment_or_group,
         molecule_id=molecule_id,
         fragmenter=fragmenter,
+        pooling=_config_get(config, "pooling", "mean_atom_and_internal_bond"),
     )
     _debug_print(
         config,
@@ -132,15 +135,17 @@ def build_metadata(config):
         "dataset": _config_get(config, "dataset", "unknown"),
         "fragmentation": _config_get(config, "fragmentation", "group_graph"),
         "pooling": _config_get(config, "pooling", "mean_atom_and_internal_bond"),
-        "atom_feature_dim": 133,
-        "bond_feature_dim": 14,
+        "atom_feature_dim": ATOM_FDIM,
+        "bond_feature_dim": BOND_FDIM,
+        "fragment_feature_dim": FRAGMENT_FEATURE_DIM,
         "config_hash": hashlib.sha256(config_json.encode("utf-8")).hexdigest(),
     }
 
 
-def save_processed_split(examples, metadata, output_path):
+def save_processed_split(examples, metadata, output_path, config=None):
     """Serialize processed examples and metadata to a .pt file."""
-    _debug_print(config_from_metadata(metadata), f"Saving {len(examples)} molecules to {output_path}")
+    if config is not None:
+        _debug_print(config, f"Saving {len(examples)} molecules to {output_path}")
     os.makedirs(osp.dirname(output_path), exist_ok=True)
     molecule_data = [
         molecule_example_to_data(example)
@@ -154,32 +159,6 @@ def save_processed_split(examples, metadata, output_path):
         output_path,
     )
     return output_path
-
-
-def validate_processed_cache(path, config):
-    """Load a processed split if it is compatible with the current config."""
-    _debug_print(config, f"Validating processed cache: {path}")
-    if not osp.exists(path):
-        raise FileNotFoundError(path)
-    if osp.getsize(path) <= 1:
-        raise ValueError(f"Processed cache is a placeholder, not valid data: {path}")
-
-    payload = torch.load(path, map_location="cpu")
-    if not isinstance(payload, dict):
-        raise ValueError("Processed cache must contain a dictionary payload")
-    if "metadata" not in payload or "molecule_data" not in payload:
-        raise ValueError("Processed cache is missing metadata or molecule_data")
-
-    expected = build_metadata(config)
-    actual = payload["metadata"]
-    for key in ["preprocess_version", "fragmentation", "pooling", "atom_feature_dim", "bond_feature_dim"]:
-        if actual.get(key) != expected.get(key):
-            raise ValueError(
-                f"Processed cache metadata mismatch for {key}: "
-                f"{actual.get(key)!r} != {expected.get(key)!r}"
-            )
-
-    return payload
 
 
 def run_preprocessing(config):
@@ -214,7 +193,7 @@ def run_preprocessing(config):
         _debug_print(config, f"Processing split '{split_name}' with {len(records)} records")
         examples, split_failures = process_split(records, config)
         output_path = osp.join(processed_dir, f"{split_name}.pt")
-        save_processed_split(examples, metadata, output_path)
+        save_processed_split(examples, metadata, output_path, config=config)
         outputs[split_name] = output_path
         failures[split_name] = split_failures
         _debug_print(
@@ -274,15 +253,6 @@ def _debug_enabled(config):
 def _debug_print(config, message):
     if _debug_enabled(config):
         print(f"[preprocess] {message}")
-
-
-def config_from_metadata(metadata):
-    return {
-        "debug": False,
-        "dataset": metadata.get("dataset"),
-        "fragmentation": metadata.get("fragmentation"),
-        "pooling": metadata.get("pooling"),
-    }
 
 
 def parse_args():
