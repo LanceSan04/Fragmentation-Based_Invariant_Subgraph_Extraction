@@ -1,0 +1,113 @@
+# Smoke-test config for the implemented Group Graph preprocessing pipeline.
+#
+# Current runnable command:
+#   .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\smoke_group_graph.yaml
+#
+# Optional loader check after preprocessing:
+#   .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\smoke_group_graph.yaml --validate-loaders
+#
+# This file uses inline split records, so it can run without downloading a
+# dataset. It is for pipeline testing, not for benchmark training.
+
+# Dataset identifier stored in each processed .pt file's metadata.
+dataset: smoke_group_graph
+
+# Representation/cache version.
+# Bump this if atom features, bond features, fragmentation rules, pooling, or
+# saved .pt structure change in a backward-incompatible way.
+preprocess_version: "0.1.0"
+
+# Fragmentation method.
+# Available now:
+#   group_graph: default Group Graph-style molecular fragments.
+#   brics: RDKit BRICS fragments for ablation/comparison.
+# Future:
+#   recap: planned, not implemented yet.
+fragmentation: group_graph
+
+# Fragment/supernode feature construction.
+# Available now:
+#   mean_atom_and_internal_bond:
+#     mean-pool raw atom features inside each fragment;
+#     mean-pool raw internal-bond features inside each fragment;
+#     append fragment size features.
+pooling: mean_atom_and_internal_bond
+
+# Fixed dimensions from the copied Group Graph encoders.
+# Current fragment vectors are 149 dims: 133 atom + 14 bond + 2 size features.
+atom_feature_dim: 133
+bond_feature_dim: 14
+
+# Output directory for generated smoke .pt files.
+# preprocess.py will write:
+#   data/processed/smoke_group_graph/train.pt
+#   data/processed/smoke_group_graph/valid.pt
+#   data/processed/smoke_group_graph/test.pt
+processed_dir: data/processed/smoke_group_graph
+
+# Record key names used by process_record().
+# These match the inline records below.
+smiles_key: smiles
+label_key: label
+environment_key: environment
+molecule_id_key: molecule_id
+
+# Error handling.
+# Keep true for smoke tests so failures are loud and easy to debug.
+strict: true
+
+# Progress logging for preprocess.py.
+# This is intentionally YAML-only; there is no CLI debug flag.
+debug: true
+
+# PyG DataLoader settings used by --validate-loaders.
+# train loaders shuffle automatically; valid/test loaders do not.
+batch_size: 2
+num_workers: 0
+pin_memory: false
+drop_last: false
+seed: 7
+
+# PyG follow_batch fields.
+# fragment_x_static creates fragment_x_static_batch after batching.
+follow_batch:
+  - fragment_x_static
+
+# Inline records grouped by split.
+# Supported split names for the current dataloader:
+#   train, valid, test
+#
+# Each record should include:
+#   molecule_id: stable identifier for inspection/debugging.
+#   smiles: molecule string parsed by RDKit.
+#   label: numeric label; preprocess.py coerces numeric values to float.
+#   environment: optional group/environment metadata.
+splits:
+  train:
+    - molecule_id: smoke_ester
+      smiles: "CCOC(=O)C"
+      label: 1
+      environment: debug_train
+    - molecule_id: smoke_benzene
+      smiles: "c1ccccc1"
+      label: 0
+      environment: debug_train
+  valid:
+    - molecule_id: smoke_ethane
+      smiles: "CC"
+      label: 1
+      environment: debug_valid
+  test:
+    - molecule_id: smoke_helium
+      smiles: "[He]"
+      label: 0
+      environment: debug_test
+
+# Alternative input style:
+# Instead of inline splits, a config can provide raw_path plus split_key.
+#
+# raw_path: data/raw/example.csv
+# split_key: split
+#
+# Supported raw_path formats:
+#   .csv, .tsv, .json, .jsonl

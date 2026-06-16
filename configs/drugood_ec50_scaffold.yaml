@@ -1,1 +1,103 @@
+# DrugOOD EC50 scaffold-shift preprocessing config.
+#
+# Current runnable command, once the raw file exists:
+#   .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\drugood_ec50_scaffold.yaml
+#
+# Optional loader check after preprocessing:
+#   .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\drugood_ec50_scaffold.yaml --validate-loaders
+#
+# This config is for preprocessing/data loading. Full OOD training and SuGAr
+# evaluation settings will be added later.
 
+# Dataset/run identifier stored in processed .pt metadata.
+dataset: drugood_ec50_scaffold
+
+# Representation/cache version.
+# Bump this if atom features, bond features, fragmentation rules, pooling, or
+# saved .pt structure change in a backward-incompatible way.
+preprocess_version: "0.1.0"
+
+# Fragmentation method.
+# Available now:
+#   group_graph: default Group Graph-style molecular fragments.
+#   brics: RDKit BRICS fragments for ablation/comparison.
+# Future:
+#   recap: planned, not implemented yet.
+fragmentation: group_graph
+
+# Fragment/supernode feature construction.
+# Available now:
+#   mean_atom_and_internal_bond:
+#     mean-pool raw atom features inside each fragment;
+#     mean-pool raw internal-bond features inside each fragment;
+#     append fragment size features.
+pooling: mean_atom_and_internal_bond
+
+# Fixed dimensions from the copied Group Graph encoders.
+# Current fragment vectors are 149 dims: 133 atom + 14 bond + 2 size features.
+atom_feature_dim: 133
+bond_feature_dim: 14
+
+# Raw input data.
+# Supported file types in preprocess.py:
+#   .csv, .tsv, .json, .jsonl
+#
+# Expected fields for this config:
+#   smiles: molecule SMILES string.
+#   label: target label.
+#   split: train, valid, or test.
+#   molecule_id: stable molecule/example identifier.
+#   environment: scaffold/group/environment metadata for OOD evaluation.
+#
+# This file path is a template until the real DrugOOD EC50 scaffold data is
+# placed in data/raw/drugood/.
+raw_path: data/raw/drugood/ec50_scaffold.csv
+
+# Directory where preprocess.py writes processed split files:
+#   train.pt, valid.pt, test.pt
+processed_dir: data/processed/drugood_ec50_scaffold
+
+# Column/key names used when reading raw records.
+# Change these if the DrugOOD export uses different names.
+smiles_key: smiles
+label_key: label
+split_key: split
+environment_key: environment
+molecule_id_key: molecule_id
+
+# Error handling during preprocessing.
+# true:
+#   fail immediately on invalid records/molecules.
+# false:
+#   skip invalid records and report them in the returned failure summary.
+strict: true
+
+# Progress logging for preprocess.py.
+# This is intentionally YAML-only; there is no CLI debug flag.
+debug: false
+
+# PyG DataLoader settings used by src/data/dataloader.py.
+# train loaders shuffle automatically; valid/test loaders do not.
+batch_size: 32
+num_workers: 0
+pin_memory: false
+drop_last: false
+seed: 42
+
+# PyG follow_batch fields.
+# fragment_x_static creates fragment_x_static_batch after batching.
+follow_batch:
+  - fragment_x_static
+
+# Future OOD/training options, not read by current preprocessing code yet.
+#
+# ood:
+#   split_type: scaffold
+#   environment_key: environment
+# metrics:
+#   primary: roc_auc
+# sugar:
+#   num_base_models: 10
+#   aggregation:
+#     - mean
+#     - max

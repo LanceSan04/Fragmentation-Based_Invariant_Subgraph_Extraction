@@ -1,7 +1,7 @@
 """PyTorch Geometric batching helpers for aligned molecular graph views."""
 
 import torch
-from torch_geometric.data import Batch, Data
+from torch_geometric.data import Data
 
 
 class MultiGraphData(Data):
@@ -114,19 +114,3 @@ def molecule_example_to_data(example) -> MoleculeData:
         data_kwargs["molecule_id"] = example.molecule_id
 
     return MoleculeData(**data_kwargs)
-
-
-def batch_molecules(examples):
-    """Batch MoleculeExample objects while preserving molecule-local mappings."""
-    data_list = [
-        molecule_example_to_data(example) if not isinstance(example, Data) else example
-        for example in examples
-    ]
-    return Batch.from_data_list(data_list)
-
-
-def split_batch_by_molecule(batch):
-    """Separate batched mappings or model outputs back into molecules."""
-    if hasattr(batch, "to_data_list"):
-        return batch.to_data_list()
-    raise TypeError("Expected a PyG Batch with a to_data_list() method")

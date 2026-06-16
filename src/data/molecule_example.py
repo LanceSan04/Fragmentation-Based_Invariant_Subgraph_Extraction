@@ -7,10 +7,8 @@ import torch
 from rdkit import Chem
 
 from src.data.atom_graph import mol_to_atom_graph
-from src.fragmentation.group_graph import (
-    GroupGraphFragmenter,
-    build_fragment_edge_features,
-)
+from src.fragmentation import build_fragmenter
+from src.fragmentation.group_graph import build_fragment_edge_features
 from src.models.fragment_pooler import FragmentPooler
 
 
@@ -111,6 +109,7 @@ def build_molecule_example(
     label=None,
     environment_or_group=None,
     molecule_id=None,
+    fragmenter=None,
 ):
     """Construct a MoleculeExample from raw molecular inputs."""
     mol = Chem.MolFromSmiles(smiles)
@@ -118,7 +117,8 @@ def build_molecule_example(
         raise ValueError(f"RDKit could not parse SMILES: {smiles!r}")
 
     atom_graph = mol_to_atom_graph(mol)
-    fragmentation = GroupGraphFragmenter().fragment(mol)
+    fragmenter = fragmenter or build_fragmenter("group_graph")
+    fragmentation = fragmenter.fragment(mol)
     fragment_edge_attr = build_fragment_edge_features(mol, fragmentation)
 
     pooler = FragmentPooler()

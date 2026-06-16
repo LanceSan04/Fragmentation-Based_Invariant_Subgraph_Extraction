@@ -1,1 +1,115 @@
+# BBBP preprocessing config.
+#
+# Current runnable command:
+#   .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\bbbp.yaml
+#
+# Optional loader check after preprocessing:
+#   .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\bbbp.yaml --validate-loaders
+#
+# This config is for the implemented preprocessing/data-loading layer only.
+# CIGA, SuGAr training, ensembles, and weight averaging are not wired into
+# config files yet.
 
+# Dataset identifier stored in each processed .pt file's metadata.
+# Used by dataloader metadata validation.
+dataset: bbbp
+
+# Representation/cache version.
+# Bump this if atom features, bond features, fragmentation rules, pooling, or
+# saved .pt structure change in a backward-incompatible way.
+preprocess_version: "0.1.0"
+
+# Fragmentation method used to turn atom graphs into fragment/supernode graphs.
+# Available now:
+#   group_graph: default Group Graph-style molecular fragments.
+#   brics: RDKit BRICS fragments for ablation/comparison.
+# Future:
+#   recap: planned, not implemented yet.
+fragmentation: group_graph
+
+# Initial fragment/supernode feature construction.
+# Available now:
+#   mean_atom_and_internal_bond:
+#     mean-pool raw atom features inside each fragment;
+#     mean-pool raw internal-bond features inside each fragment;
+#     append fragment size features.
+# Future ablations may add atom-GNN pooling, max pooling, sum pooling, or
+# attention pooling.
+pooling: mean_atom_and_internal_bond
+
+# Fixed feature dimensions from the copied Group Graph encoders.
+# atom_feature_dim is checked by dataloader metadata validation.
+# bond_feature_dim is checked by dataloader metadata validation.
+# Current fragment vectors are 149 dims: 133 atom + 14 bond + 2 size features.
+atom_feature_dim: 133
+bond_feature_dim: 14
+
+# Raw input data.
+# Supported file types in preprocess.py:
+#   .csv, .tsv, .json, .jsonl
+#
+# Expected CSV/TSV columns for this config:
+#   smiles, label, split, molecule_id
+#
+# The split column should contain:
+#   train, valid, test
+#
+# If the raw file has no split column, preprocess.py will write all.pt instead
+# of train.pt/valid.pt/test.pt, and the current dataloader will not pick it up.
+raw_path: data/raw/bbbp/bbbp.csv
+
+# Directory where preprocess.py writes processed split files:
+#   train.pt, valid.pt, test.pt
+processed_dir: data/processed/bbbp
+
+# Column/key names used when reading raw records.
+# Change these if the raw dataset uses different column names.
+smiles_key: smiles
+label_key: label
+split_key: split
+environment_key: environment
+molecule_id_key: molecule_id
+
+# Error handling during preprocessing.
+# true:
+#   fail immediately on invalid records/molecules.
+# false:
+#   skip invalid records and report them in the returned failure summary.
+strict: true
+
+# Progress logging for preprocess.py.
+# This is intentionally YAML-only; there is no CLI debug flag.
+# true:
+#   print step-by-step preprocessing messages.
+# false:
+#   print only the final completion summary.
+debug: false
+
+# PyG DataLoader settings used by src/data/dataloader.py.
+# train loaders shuffle automatically; valid/test loaders do not.
+batch_size: 32
+num_workers: 0
+pin_memory: false
+drop_last: false
+seed: 42
+
+# PyG follow_batch fields.
+# Available current field:
+#   fragment_x_static:
+#     creates fragment_x_static_batch so later model code can know which
+#     fragment belongs to which molecule after batching.
+follow_batch:
+  - fragment_x_static
+
+# Future training/model options will eventually live here, but are not read by
+# the current preprocessing code yet.
+#
+# model:
+#   fragment_encoder: gin
+#   invariant_atom_classifier: gin
+# selection:
+#   method: top_ratio
+#   ratio: 0.5
+# sugar:
+#   num_base_models: 3
+#   aggregation: mean
