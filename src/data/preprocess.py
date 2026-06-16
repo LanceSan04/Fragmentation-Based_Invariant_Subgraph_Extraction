@@ -10,11 +10,18 @@ import hashlib
 import json
 import os
 import os.path as osp
+import random
 
 import torch
+from rdkit import Chem
 
-from src.data.molecule_example import build_molecule_example
-from src.data.pyg_batch import molecule_example_to_data
+from src.data.atom_graph import mol_to_atom_graph
+from src.data.pyg_batch import MoleculeData
+from src.fragmentation.group_graph import (
+    GroupGraphFragmenter,
+    build_fragment_edge_features,
+)
+from src.models.fragment_pooler import FragmentPooler
 
 
 def load_raw_records(config):
@@ -48,11 +55,12 @@ def load_raw_records(config):
 
 
 def process_record(record, config):
-    """Convert one raw record into a validated MoleculeExample."""
+    """Convert one raw record into a validated MoleculeData object."""
     smiles_key = _config_get(config, "smiles_key", "smiles")
     label_key = _config_get(config, "label_key", "label")
     environment_key = _config_get(config, "environment_key", "environment")
     molecule_id_key = _config_get(config, "molecule_id_key", "molecule_id")
+    fragmentation = _config_get(config, "fragmentation", "group_graph")
 
     smiles = _record_get(record, smiles_key)
     if smiles is None:
@@ -63,19 +71,95 @@ def process_record(record, config):
     environment_or_group = _record_get(record, environment_key, None)
     molecule_id = _record_get(record, molecule_id_key, None)
 
-    return build_molecule_example(
+    return build_molecule_data(
         smiles=smiles,
         label=label,
         environment_or_group=environment_or_group,
         molecule_id=molecule_id,
+        fragmentation=fragmentation,
     )
+
+
+def build_molecule_data(
+    smiles,
+    label=None,
+    environment_or_group=None,
+    molecule_id=None,
+    fragmentation="group_graph",
+):
+    """Convert SMILES into a PyG MoleculeData record with fragment provenance."""
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise ValueError(f"RDKit could not parse SMILES: {smiles!r}")
+
+    atom_graph = mol_to_atom_graph(mol)
+    fragmenter = _build_fragmenter(fragmentation)
+    fragmentation_result = fragmenter.fragment(mol)
+    fragment_edge_attr = build_fragment_edge_features(mol, fragmentation_result)
+
+    pooler = FragmentPooler()
+    fragment_x_static = pooler(
+        atom_graph.atom_x,
+        atom_graph.bond_index,
+        atom_graph.bond_attr,
+        fragmentation_result.atom_to_fragment,
+        num_fragments=fragmentation_result.num_fragments,
+    )
+
+    y = None
+    if label is not None:
+        y = torch.as_tensor(label, dtype=torch.float32)
+        if y.dim() == 0:
+            y = y.view(1)
+
+    return MoleculeData(
+        x=atom_graph.atom_x,
+        edge_index=atom_graph.atom_edge_index,
+        edge_attr=atom_graph.atom_edge_attr,
+        bond_index=atom_graph.bond_index,
+        bond_attr=atom_graph.bond_attr,
+        atom_ids=atom_graph.atom_ids,
+        bond_ids=atom_graph.bond_ids,
+        directed_edge_to_bond=atom_graph.directed_edge_to_bond,
+        fragment_x_static=fragment_x_static,
+        fragment_edge_index=fragmentation_result.fragment_edge_index,
+        fragment_edge_attr=fragment_edge_attr,
+        atom_to_fragment=fragmentation_result.atom_to_fragment,
+        fragment_to_atoms=fragmentation_result.fragment_to_atoms,
+        fragment_to_atom_index=build_fragment_to_atom_index(fragmentation_result.fragment_to_atoms),
+        fragment_edge_to_bond=fragmentation_result.fragment_edge_to_bond,
+        fragment_edge_to_bond_index=fragmentation_result.fragment_edge_to_bond_index,
+        fragment_edge_to_attachment_atoms=fragmentation_result.fragment_edge_to_attachment_atoms,
+        y=y,
+        environment_or_group=environment_or_group,
+        smiles=smiles,
+        molecule_id=molecule_id,
+    )
+
+
+def _build_fragmenter(fragmentation_name):
+    if fragmentation_name == "group_graph":
+        return GroupGraphFragmenter()
+    raise ValueError(f"Unsupported fragmentation method: {fragmentation_name}")
+
+
+def build_fragment_to_atom_index(fragment_to_atoms):
+    """Build a [fragment_id, atom_id] membership index for PyG batching."""
+    pairs = []
+    for fragment_id, atoms in enumerate(fragment_to_atoms):
+        for atom_id in torch.as_tensor(atoms, dtype=torch.long).tolist():
+            pairs.append([fragment_id, atom_id])
+
+    if not pairs:
+        return torch.empty((2, 0), dtype=torch.long)
+    return torch.tensor(pairs, dtype=torch.long).t().contiguous()
 
 
 def process_split(records, config):
     """Process every record in one split."""
     examples = []
     failures = []
-    strict = bool(_config_get(config, "strict", True))
+    strict = False
 
     for index, record in enumerate(records):
         try:
@@ -104,16 +188,12 @@ def build_metadata(config):
 
 
 def save_processed_split(examples, metadata, output_path):
-    """Serialize processed examples and metadata to a .pt file."""
+    """Serialize processed MoleculeData records and metadata to a .pt file."""
     os.makedirs(osp.dirname(output_path), exist_ok=True)
-    molecule_data = [
-        molecule_example_to_data(example)
-        for example in examples
-    ]
     torch.save(
         {
             "metadata": metadata,
-            "molecule_data": molecule_data,
+            "molecule_data": examples,
         },
         output_path,
     )
@@ -145,6 +225,105 @@ def validate_processed_cache(path, config):
     return payload
 
 
+def generate_random_splits(records, train_ratio=0.7, valid_ratio=0.15, seed=None):
+    """Generate train/valid/test splits by random sampling.
+    
+    Args:
+        records: List of records to split
+        train_ratio: Fraction for training (default 0.7)
+        valid_ratio: Fraction for validation (default 0.15, remaining goes to test)
+        seed: Random seed for reproducibility
+        
+    Returns:
+        dict: {"train": [...], "valid": [...], "test": [...]}
+    """
+    if seed is not None:
+        random.seed(seed)
+    
+    # Shuffle records
+    shuffled = records.copy()
+    random.shuffle(shuffled)
+    
+    # Calculate split indices
+    n = len(records)
+    train_size = int(n * train_ratio)
+    valid_size = int(n * valid_ratio)
+    
+    splits = {
+        "train": shuffled[:train_size],
+        "valid": shuffled[train_size : train_size + valid_size],
+        "test": shuffled[train_size + valid_size :],
+    }
+    
+    return splits
+
+
+def generate_scaffold_splits(records, smiles_key="smiles", train_ratio=0.7, valid_ratio=0.15, seed=None):
+    """Generate train/valid/test splits by scaffold (requires RDKit).
+    
+    Molecules with similar scaffolds are kept together to avoid scaffold leakage.
+    
+    Args:
+        records: List of records (must have smiles_key field)
+        smiles_key: Field name containing SMILES
+        train_ratio: Fraction for training
+        valid_ratio: Fraction for validation
+        seed: Random seed
+        
+    Returns:
+        dict: {"train": [...], "valid": [...], "test": [...]}
+    """
+    from rdkit.Chem.Scaffolds import MurckoScaffold
+    
+    if seed is not None:
+        random.seed(seed)
+    
+    # Group records by scaffold
+    scaffold_dict = {}
+    for record in records:
+        try:
+            smiles = _record_get(record, smiles_key)
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is None:
+                continue
+            scaffold = MurckoScaffold.MurckoScaffoldSmilesFromSmiles(smiles)
+            scaffold_dict.setdefault(scaffold, []).append(record)
+        except Exception:
+            # If scaffold extraction fails, add to "unknown" scaffold
+            scaffold_dict.setdefault("unknown", []).append(record)
+    
+    # Shuffle scaffolds
+    scaffolds = list(scaffold_dict.keys())
+    random.shuffle(scaffolds)
+    
+    # Distribute scaffolds across splits
+    train_records = []
+    valid_records = []
+    test_records = []
+    
+    train_size = int(len(records) * train_ratio)
+    valid_size = int(len(records) * valid_ratio)
+    
+    for scaffold in scaffolds:
+        scaffold_records = scaffold_dict[scaffold]
+        if len(train_records) < train_size:
+            train_records.extend(scaffold_records)
+        elif len(valid_records) < valid_size:
+            valid_records.extend(scaffold_records)
+        else:
+            test_records.extend(scaffold_records)
+    
+    # Handle overflow
+    while len(train_records) > train_size and len(test_records) < len(records) - train_size - valid_size:
+        test_records.append(train_records.pop())
+    
+    return {
+        "train": train_records[:train_size],
+        "valid": valid_records[:valid_size],
+        "test": test_records,
+    }
+
+
 def run_preprocessing(config):
     """Run preprocessing for configured splits and save processed .pt files."""
     metadata = build_metadata(config)
@@ -152,16 +331,54 @@ def run_preprocessing(config):
     if processed_dir is None:
         raise ValueError("config must provide processed_dir")
 
+    # Step 1: Try to get pre-configured splits
     split_records = _config_get(config, "splits")
+    
     if split_records is None:
-        split_key = _config_get(config, "split_key", "split")
+        # Step 2: Try to load records and check for split_key field
         records = load_raw_records(config)
-        split_records = {"all": records}
-        if records and isinstance(records[0], dict) and split_key in records[0]:
+        split_key = _config_get(config, "split_key", None)
+        
+        if split_key and records and isinstance(records[0], dict) and split_key in records[0]:
+            # Records have split_key field - use it
             split_records = {}
             for record in records:
                 split_name = str(record[split_key])
                 split_records.setdefault(split_name, []).append(record)
+        else:
+            # Step 3: Auto-generate splits if enabled
+            auto_split = _config_get(config, "auto_split", False)
+            if auto_split:
+                split_method = _config_get(config, "split_method", "random")
+                train_ratio = _config_get(config, "train_ratio", 0.7)
+                valid_ratio = _config_get(config, "valid_ratio", 0.15)
+                split_seed = _config_get(config, "split_seed", None)
+                
+                print(f"Auto-generating splits using {split_method} method...")
+                print(f"  Train: {train_ratio*100:.0f}% | Valid: {valid_ratio*100:.0f}% | Test: {(1-train_ratio-valid_ratio)*100:.0f}%")
+                
+                if split_method == "scaffold":
+                    split_records = generate_scaffold_splits(
+                        records,
+                        smiles_key=_config_get(config, "smiles_key", "smiles"),
+                        train_ratio=train_ratio,
+                        valid_ratio=valid_ratio,
+                        seed=split_seed,
+                    )
+                else:  # default: random
+                    split_records = generate_random_splits(
+                        records,
+                        train_ratio=train_ratio,
+                        valid_ratio=valid_ratio,
+                        seed=split_seed,
+                    )
+                
+                # Print split statistics
+                for split_name, split_data in split_records.items():
+                    print(f"  {split_name}: {len(split_data)} molecules")
+            else:
+                # No splits specified - process all as one
+                split_records = {"all": records}
 
     outputs = {}
     failures = {}
@@ -171,6 +388,7 @@ def run_preprocessing(config):
         save_processed_split(examples, metadata, output_path)
         outputs[split_name] = output_path
         failures[split_name] = split_failures
+        print(f"Saved {split_name} split: {len(examples)} molecules → {output_path}")
 
     return {"metadata": metadata, "outputs": outputs, "failures": failures}
 
@@ -204,3 +422,22 @@ def _to_plain_dict(config):
     if hasattr(config, "__dict__"):
         return dict(config.__dict__)
     return {"config": str(config)}
+
+
+if __name__ == "__main__":
+    import argparse
+    import yaml
+    
+    parser = argparse.ArgumentParser(description="Preprocess molecular data into PyG format with optional train/valid/test splitting")
+    parser.add_argument("--config", type=str, required=True, help="Path to YAML config file")
+    args = parser.parse_args()
+    
+    with open(args.config, "r") as f:
+        config = yaml.safe_load(f)
+    
+    result = run_preprocessing(config)
+    print("\nPreprocessing complete!")
+    print(f"Outputs: {result['outputs']}")
+    if result['failures']:
+        print(f"Failures: {result['failures']}")
+

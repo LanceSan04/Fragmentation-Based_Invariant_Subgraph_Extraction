@@ -42,7 +42,7 @@ def load_processed_split(path, expected_metadata=None):
     if osp.getsize(path) <= 1:
         raise ValueError(f"Processed split is a placeholder, not valid data: {path}")
 
-    payload = torch.load(path, map_location="cpu")
+    payload = torch.load(path, map_location="cpu", weights_only=False)
     if not isinstance(payload, dict):
         raise ValueError("Processed split must contain a dictionary payload")
     if "metadata" not in payload or "molecule_data" not in payload:

@@ -156,11 +156,11 @@ def get_ar_rings(mol):
 
 
 def get_diff(a, b):
+    union_a = set(get_list(a))
     new_b = []
-    for i in a:
-        for j in b:
-            if not set(j).intersection(set(i)):
-                new_b.append(j)
+    for j in b:
+        if not set(j).intersection(union_a):
+            new_b.append(j)
     return tuple(new_b)
 
 

@@ -123,17 +123,19 @@ def reconstruct_atom_graph(
 
 
 def relabel_reconstructed_atoms(atom_ids, edge_index):
-    """Relabel selected atoms while retaining original atom provenance."""
+    """Relabel selected atoms while retaining original atom provenance using fast vectorization."""
     atom_ids = torch.as_tensor(atom_ids, dtype=torch.long, device=edge_index.device)
-    old_to_new = {int(old_id): new_id for new_id, old_id in enumerate(atom_ids.tolist())}
 
     if edge_index.numel() == 0:
         return torch.empty((2, 0), dtype=torch.long, device=edge_index.device), atom_ids
 
-    relabeled = torch.empty_like(edge_index)
-    for col in range(edge_index.size(1)):
-        relabeled[0, col] = old_to_new[int(edge_index[0, col])]
-        relabeled[1, col] = old_to_new[int(edge_index[1, col])]
+    max_id = int(edge_index.max())
+    
+    mapping = torch.zeros(max_id + 1, dtype=torch.long, device=edge_index.device)
+    mapping[atom_ids] = torch.arange(atom_ids.numel(), device=edge_index.device)
+
+    relabeled = mapping[edge_index]
+    
     return relabeled, atom_ids
 
 
