@@ -1,16 +1,35 @@
-# Smoke-test config for the implemented Group Graph preprocessing pipeline.
+# Unified experiment config for the implemented preprocessing pipeline.
 #
-# Current runnable command:
-#   .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\smoke_group_graph.yaml
+# Current smoke-test command:
+#   .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\experiment.yaml
 #
-# Optional loader check after preprocessing:
-#   .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\smoke_group_graph.yaml --validate-loaders
+# Optional loader check:
+#   .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\experiment.yaml --validate-loaders
 #
-# This file uses inline split records, so it can run without downloading a
-# dataset. It is for pipeline testing, not for benchmark training.
+# This one file can be used in two modes:
+#
+# 1. Smoke mode:
+#    Keep the inline `splits:` block at the bottom. This runs without a
+#    downloaded dataset and is useful for checking preprocessing, batching,
+#    fragmentation, and reconstruction contracts.
+#
+# 2. Real dataset mode:
+#    Remove or comment out the `splits:` block, then set `dataset`, `raw_path`,
+#    `processed_dir`, and the record key names below. preprocess.py will read
+#    .csv, .tsv, .json, or .jsonl records and group them by `split_key`.
+#
+# Keep `processed_dir` aligned with both the dataset and fragmentation method
+# so outputs from different fragmenters do not overwrite each other.
 
 # Dataset identifier stored in each processed .pt file's metadata.
-dataset: smoke_group_graph
+#
+# Smoke mode:
+#   dataset: smoke
+#
+# Real dataset examples:
+#   dataset: bbbp
+#   dataset: drugood_ec50_scaffold
+dataset: smoke
 
 # Representation/cache version.
 # Bump this if atom features, bond features, fragmentation rules, pooling, or
@@ -39,17 +58,33 @@ atom_feature_dim: 133
 bond_feature_dim: 14
 fragment_feature_dim: 149
 
-# Output directory for generated smoke .pt files.
+# Output directory for generated .pt files.
 # preprocess.py will write:
-#   data/processed/smoke_group_graph/train.pt
-#   data/processed/smoke_group_graph/valid.pt
-#   data/processed/smoke_group_graph/test.pt
-processed_dir: data/processed/smoke_group_graph
+#   data/processed/smoke/group_graph/train.pt
+#   data/processed/smoke/group_graph/valid.pt
+#   data/processed/smoke/group_graph/test.pt
+#
+# Examples:
+#   processed_dir: data/processed/smoke/group_graph
+#   processed_dir: data/processed/smoke/brics
+#   processed_dir: data/processed/bbbp/group_graph
+#   processed_dir: data/processed/bbbp/brics
+processed_dir: data/processed/smoke/group_graph
 
-# Record key names used by process_record().
-# These match the inline records below.
+# Real dataset input path.
+# Leave this commented in smoke mode because the inline `splits:` block below
+# is the data source. In real dataset mode, uncomment and set this path.
+#
+# Supported file types:
+#   .csv, .tsv, .json, .jsonl
+#
+# raw_path: data/raw/bbbp/bbbp.csv
+
+# Record key names used by process_record(). These must match either the inline
+# records below or the real dataset file columns/keys.
 smiles_key: smiles
 label_key: label
+split_key: split
 environment_key: environment
 molecule_id_key: molecule_id
 
@@ -74,7 +109,7 @@ seed: 7
 follow_batch:
   - fragment_x_static
 
-# Inline records grouped by split.
+# Smoke-mode inline records grouped by split.
 # Supported split names for the current dataloader:
 #   train, valid, test
 #
@@ -83,6 +118,9 @@ follow_batch:
 #   smiles: molecule string parsed by RDKit.
 #   label: numeric label; preprocess.py coerces numeric values to float.
 #   environment: optional group/environment metadata.
+#
+# For real dataset mode, remove or comment out this entire `splits:` block and
+# use `raw_path` plus `split_key` above.
 splits:
   train:
     - molecule_id: smoke_ester
@@ -104,11 +142,15 @@ splits:
       label: 0
       environment: debug_test
 
-# Alternative input style:
-# Instead of inline splits, a config can provide raw_path plus split_key.
+# Future model/training options will eventually live in this same config, but
+# are not read by the current preprocessing code yet.
 #
-# raw_path: data/raw/example.csv
-# split_key: split
-#
-# Supported raw_path formats:
-#   .csv, .tsv, .json, .jsonl
+# model:
+#   fragment_encoder: gin
+#   invariant_atom_classifier: gin
+# selection:
+#   method: top_ratio
+#   ratio: 0.5
+# sugar:
+#   num_base_models: 3
+#   aggregation: mean
