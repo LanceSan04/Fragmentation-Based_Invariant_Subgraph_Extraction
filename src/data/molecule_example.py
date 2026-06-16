@@ -31,6 +31,8 @@ class MoleculeExample:
     fragment_edge_to_bond: Any = None
     fragment_edge_to_bond_index: Any = None
     fragment_edge_to_attachment_atoms: Any = None
+    fragment_types: Optional[Any] = None
+    fragment_smiles: Optional[Any] = None
     y: Any = None
     environment_or_group: Optional[Any] = None
     smiles: Optional[str] = None
@@ -65,6 +67,10 @@ class MoleculeExample:
         num_fragments = self.fragment_x_static.size(0)
         num_fragment_edges = self.fragment_edge_index.size(1)
 
+        if self.fragment_types is not None and len(self.fragment_types) != num_fragments:
+            raise ValueError("fragment_types must contain one value per fragment")
+        if self.fragment_smiles is not None and len(self.fragment_smiles) != num_fragments:
+            raise ValueError("fragment_smiles must contain one value per fragment")
         if self.atom_to_fragment.shape != (num_atoms,):
             raise ValueError("atom_to_fragment must contain one value per atom")
         if self.fragment_edge_to_bond.shape != (num_fragment_edges,):
@@ -156,6 +162,8 @@ def build_molecule_example(
         fragment_edge_to_bond=fragmentation.fragment_edge_to_bond,
         fragment_edge_to_bond_index=fragmentation.fragment_edge_to_bond_index,
         fragment_edge_to_attachment_atoms=fragmentation.fragment_edge_to_attachment_atoms,
+        fragment_types=fragmentation.fragment_types,
+        fragment_smiles=fragmentation.fragment_smiles,
         y=y,
         environment_or_group=environment_or_group,
         smiles=smiles,

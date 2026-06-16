@@ -72,6 +72,10 @@ def molecule_example_to_data(example) -> MoleculeData:
         "fragment_edge_to_attachment_atoms": example.fragment_edge_to_attachment_atoms,
     }
 
+    if example.fragment_types is not None:
+        data_kwargs["fragment_types"] = list(example.fragment_types)
+    if example.fragment_smiles is not None:
+        data_kwargs["fragment_smiles"] = list(example.fragment_smiles)
     if example.y is not None:
         data_kwargs["y"] = example.y
     if example.environment_or_group is not None:

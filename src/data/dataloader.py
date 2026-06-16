@@ -8,6 +8,8 @@ batching are project-specific.
 
 import os.path as osp
 import random
+import hashlib
+import json
 
 import torch
 from torch_geometric.loader import DataLoader
@@ -190,4 +192,19 @@ def _expected_metadata(config):
         value = _config_get(config, key, None)
         if value is not None:
             metadata[key] = value
+    metadata["config_hash"] = _config_hash(config)
     return metadata
+
+
+def _config_hash(config):
+    config_payload = _to_plain_dict(config)
+    config_json = json.dumps(config_payload, sort_keys=True, default=str)
+    return hashlib.sha256(config_json.encode("utf-8")).hexdigest()
+
+
+def _to_plain_dict(config):
+    if isinstance(config, dict):
+        return dict(config)
+    if hasattr(config, "__dict__"):
+        return dict(config.__dict__)
+    return {"config": str(config)}

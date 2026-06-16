@@ -5,7 +5,12 @@ from collections import deque
 import torch
 from rdkit.Chem import BRICS
 
-from src.fragmentation.base import FragmentationResult, Fragmenter, validate_fragmentation
+from src.fragmentation.base import (
+    FragmentationResult,
+    Fragmenter,
+    fragment_smiles_from_atom_sets,
+    validate_fragmentation,
+)
 
 
 class BRICSFragmenter(Fragmenter):
@@ -33,6 +38,7 @@ class BRICSFragmenter(Fragmenter):
             fragment_edge_to_bond_index=fragment_edge_to_bond_index,
             fragment_edge_to_attachment_atoms=attachments,
             fragment_types=["brics"] * len(fragment_tensors),
+            fragment_smiles=fragment_smiles_from_atom_sets(mol, fragment_tensors),
         )
         return validate_fragmentation(result, mol)
 

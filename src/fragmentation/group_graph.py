@@ -4,7 +4,12 @@ import torch
 from rdkit import Chem
 
 from src.data.atom_graph import ATOM_FDIM, BOND_FDIM, atom_features, bond_features
-from src.fragmentation.base import FragmentationResult, Fragmenter, validate_fragmentation
+from src.fragmentation.base import (
+    FragmentationResult,
+    Fragmenter,
+    fragment_smiles_from_atom_sets,
+    validate_fragmentation,
+)
 from src.fragmentation.molecule_fragment import find_clusters
 
 
@@ -49,6 +54,7 @@ def build_fragmentation_result(mol, cluster):
         fragment_edge_to_bond_index=fragment_edge_to_bond_index,
         fragment_edge_to_attachment_atoms=attachments,
         fragment_types=ordered_types,
+        fragment_smiles=fragment_smiles_from_atom_sets(mol, fragment_to_atoms),
     )
 
 
