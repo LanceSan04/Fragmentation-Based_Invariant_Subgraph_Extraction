@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import os.path as osp
+import random
 import sys
 from pathlib import Path
 
@@ -89,7 +90,8 @@ def process_record(record, config):
     if smiles is None:
         raise ValueError(f"Record is missing SMILES key {smiles_key!r}: {record!r}")
 
-    _debug_print(config, f"Processing molecule: {smiles}")
+    if _debug_molecule_details(config):
+        _debug_print(config, f"Processing molecule: {smiles}")
     label = _record_get(record, label_key, None)
     label = _coerce_label(label)
     environment_or_group = _record_get(record, environment_key, None)
@@ -104,14 +106,15 @@ def process_record(record, config):
         fragmenter=fragmenter,
         pooling=_config_get(config, "pooling", "mean_atom_and_internal_bond"),
     )
-    _debug_print(
-        config,
-        "Built molecule "
-        f"{smiles}: atoms={example.atom_x.size(0)}, "
-        f"bonds={example.bond_attr.size(0)}, "
-        f"fragments={example.fragment_x_static.size(0)}, "
-        f"fragment_edges={example.fragment_edge_index.size(1)}",
-    )
+    if _debug_molecule_details(config):
+        _debug_print(
+            config,
+            "Built molecule "
+            f"{smiles}: atoms={example.atom_x.size(0)}, "
+            f"bonds={example.bond_attr.size(0)}, "
+            f"fragments={example.fragment_x_static.size(0)}, "
+            f"fragment_edges={example.fragment_edge_index.size(1)}",
+        )
     return example
 
 
@@ -123,7 +126,8 @@ def process_split(records, config):
 
     for index, record in enumerate(records):
         try:
-            _debug_print(config, f"Record {index + 1}/{len(records)}")
+            if _should_debug_record(config, index, len(records)):
+                _debug_print(config, f"Record {index + 1}/{len(records)}")
             examples.append(process_record(record, config))
         except Exception as exc:
             if strict:
@@ -188,12 +192,13 @@ def run_preprocessing(config):
     if split_records is None:
         split_key = _config_get(config, "split_key", "split")
         records = load_raw_records(config)
-        split_records = {"all": records}
         if records and isinstance(records[0], dict) and split_key in records[0]:
             split_records = {}
             for record in records:
                 split_name = str(record[split_key])
                 split_records.setdefault(split_name, []).append(record)
+        else:
+            split_records = split_records_by_ratio(records, config)
 
     outputs = {}
     failures = {}
@@ -210,8 +215,110 @@ def run_preprocessing(config):
             f"saved={len(examples)}, failures={len(split_failures)}, path={output_path}",
         )
 
+    failure_report_path = save_failure_report(failures, config, processed_dir)
+    if failure_report_path is not None:
+        _debug_print(config, f"Saved failure report: {failure_report_path}")
+
     _debug_print(config, "Finished preprocessing")
-    return {"metadata": metadata, "outputs": outputs, "failures": failures}
+    return {
+        "metadata": metadata,
+        "outputs": outputs,
+        "failures": failures,
+        "failure_report": failure_report_path,
+    }
+
+
+def save_failure_report(failures, config, processed_dir):
+    """Write skipped records to CSV so dataset issues can be inspected later."""
+    rows = []
+    smiles_key = _config_get(config, "smiles_key", "smiles")
+    molecule_id_key = _config_get(config, "molecule_id_key", "molecule_id")
+    label_key = _config_get(config, "label_key", "label")
+    for split_name, split_failures in failures.items():
+        for failure in split_failures:
+            record = failure.get("record", {})
+            rows.append(
+                {
+                    "split": split_name,
+                    "split_index": failure.get("index"),
+                    "molecule_id": _record_get(record, molecule_id_key, ""),
+                    "smiles": _record_get(record, smiles_key, ""),
+                    "label": _record_get(record, label_key, ""),
+                    "error": failure.get("error", ""),
+                    "record_json": json.dumps(record, sort_keys=True, default=str),
+                }
+            )
+
+    if not rows:
+        return None
+
+    report_path = _config_get(config, "failure_report_path")
+    if report_path is None:
+        report_path = osp.join(processed_dir, "preprocess_failures.csv")
+
+    os.makedirs(osp.dirname(report_path), exist_ok=True)
+    with open(report_path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "split",
+                "split_index",
+                "molecule_id",
+                "smiles",
+                "label",
+                "error",
+                "record_json",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+    return report_path
+
+
+def split_records_by_ratio(records, config):
+    """Create deterministic train/valid/test splits when raw data has no split column."""
+    ratios = _config_get(
+        config,
+        "split_ratios",
+        {"train": 0.8, "valid": 0.1, "test": 0.1},
+    )
+    if not isinstance(ratios, dict):
+        raise ValueError("split_ratios must be a mapping such as {train: 0.8, valid: 0.1, test: 0.1}")
+
+    split_names = list(ratios.keys())
+    if not split_names:
+        raise ValueError("split_ratios must define at least one split")
+
+    ratio_values = [float(ratios[name]) for name in split_names]
+    if any(value < 0 for value in ratio_values):
+        raise ValueError("split_ratios cannot contain negative values")
+    ratio_total = sum(ratio_values)
+    if ratio_total <= 0:
+        raise ValueError("split_ratios must sum to a positive value")
+
+    indexed_records = list(enumerate(records))
+    seed = int(_config_get(config, "seed", 0))
+    rng = random.Random(seed)
+    rng.shuffle(indexed_records)
+    shuffled_records = [record for _, record in indexed_records]
+
+    total_records = len(shuffled_records)
+    split_records = {}
+    cursor = 0
+    for index, split_name in enumerate(split_names):
+        if index == len(split_names) - 1:
+            end = total_records
+        else:
+            end = cursor + int(total_records * (ratio_values[index] / ratio_total))
+        split_records[split_name] = shuffled_records[cursor:end]
+        cursor = end
+
+    _debug_print(
+        config,
+        "Created deterministic ratio splits: "
+        + ", ".join(f"{name}={len(items)}" for name, items in split_records.items()),
+    )
+    return split_records
 
 
 def load_config(path):
@@ -261,6 +368,17 @@ def _debug_enabled(config):
 def _debug_print(config, message):
     if _debug_enabled(config):
         print(f"[preprocess] {message}")
+
+
+def _debug_molecule_details(config):
+    return bool(_config_get(config, "debug_molecule_details", True))
+
+
+def _should_debug_record(config, index, total):
+    interval = int(_config_get(config, "debug_record_interval", 1))
+    if interval <= 1:
+        return True
+    return index == 0 or index == total - 1 or (index + 1) % interval == 0
 
 
 def parse_args():

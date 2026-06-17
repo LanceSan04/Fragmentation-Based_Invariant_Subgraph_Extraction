@@ -1,6 +1,18 @@
+"""Regression tests for the fragmentation/preprocessing foundation.
+
+Run this file from the repository root with:
+
+    .\.venv\Scripts\python.exe -m unittest tests.test_fragment_pipeline -v
+
+Run the full test suite with:
+
+    .\.venv\Scripts\python.exe -m unittest discover -s tests -v
+"""
+
 import os.path as osp
 import tempfile
 import unittest
+import csv
 
 import torch
 from torch_geometric.data import Batch
@@ -8,6 +20,7 @@ from torch_geometric.data import Batch
 from src.data.dataloader import build_split_dataloaders, validate_dataloader_batch
 from src.data.molecule_example import build_molecule_example
 from src.data.pyg_batch import molecule_example_to_data
+from src.data.preprocess import run_preprocessing
 from src.fragmentation import build_fragmenter
 from src.models.atom_reconstructor import reconstruct_atom_graph, reconstruct_batch
 
@@ -63,6 +76,19 @@ class FragmentPipelineTests(unittest.TestCase):
 
     def test_all_brics_fragment_edges_reconstruct_original_atom_graph(self):
         self.assert_all_fragment_edges_reconstruct_original_atom_graph("brics")
+
+    def test_group_graph_resolves_overlapping_split_fragments(self):
+        data = self.build_data(
+            "N[S](=O)(=O)c1cc2c(NC=N[S]2(=O)=O)cc1Cl",
+            "group_graph",
+        )
+
+        self.assertEqual(data.atom_to_fragment.numel(), data.x.size(0))
+        for fragment_id in range(data.fragment_x_static.size(0)):
+            atoms = data.fragment_to_atom_index[1][
+                data.fragment_to_atom_index[0] == fragment_id
+            ]
+            self.assertTrue(torch.all(data.atom_to_fragment[atoms] == fragment_id))
 
     def assert_all_fragment_edges_reconstruct_original_atom_graph(self, fragmentation):
         data = self.build_data("CCOC(=O)C", fragmentation)
@@ -130,6 +156,38 @@ class FragmentPipelineTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "config_hash"):
                 build_split_dataloaders(tmp_dir, config)
+
+    def test_preprocessing_writes_failure_report_for_skipped_records(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = {
+                "dataset": "failure_report_test",
+                "preprocess_version": "0.1.0",
+                "fragmentation": "group_graph",
+                "pooling": "mean_atom_and_internal_bond",
+                "processed_dir": tmp_dir,
+                "smiles_key": "smiles",
+                "label_key": "label",
+                "molecule_id_key": "molecule_id",
+                "strict": False,
+                "debug": False,
+                "splits": {
+                    "train": [
+                        {"molecule_id": "good", "smiles": "CC", "label": 1},
+                        {"molecule_id": "bad", "smiles": "not_a_smiles", "label": 0},
+                    ]
+                },
+            }
+
+            result = run_preprocessing(config)
+
+            self.assertIsNotNone(result["failure_report"])
+            self.assertTrue(osp.exists(result["failure_report"]))
+            with open(result["failure_report"], newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["split"], "train")
+            self.assertEqual(rows[0]["molecule_id"], "bad")
+            self.assertIn("RDKit could not parse SMILES", rows[0]["error"])
 
     def test_single_fragment_reconstruction_keeps_full_graph_without_edges(self):
         data = self.build_data("c1ccccc1", "group_graph")

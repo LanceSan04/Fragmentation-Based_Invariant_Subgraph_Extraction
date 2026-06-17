@@ -32,7 +32,7 @@ class GroupGraphFragmenter(Fragmenter):
 
 def build_fragmentation_result(mol, cluster):
     """Convert upstream Group Graph clusters into FragmentationResult."""
-    ordered_fragments, ordered_types = order_fragments_deterministically(cluster)
+    ordered_fragments, ordered_types = partition_overlapping_clusters(mol, cluster)
     num_atoms = mol.GetNumAtoms()
 
     atom_to_fragment = torch.empty(num_atoms, dtype=torch.long)
@@ -56,6 +56,69 @@ def build_fragmentation_result(mol, cluster):
         fragment_types=ordered_types,
         fragment_smiles=fragment_smiles_from_atom_sets(mol, fragment_to_atoms),
     )
+
+
+def partition_overlapping_clusters(mol, cluster):
+    """Resolve upstream Group Graph overlaps into a molecule-wide partition.
+
+    The copied Group Graph rules can emit overlapping split fragments for some
+    functional groups. This project requires each atom to belong to exactly one
+    fragment for pooling, batching, and reconstruction, so higher-priority
+    clusters claim atoms first and lower-priority clusters keep only unclaimed
+    atoms. Priority is project-specific: split fragments first, larger clusters
+    first, then stable atom-index tie-breakers. Any atom missed by upstream
+    rules is added as a connected fallback fragment.
+    """
+    candidates = sorted(
+        ((tuple(sorted(atoms)), fragment_type) for atoms, fragment_type in cluster.items()),
+        key=_cluster_priority,
+    )
+
+    assigned = set()
+    partition = []
+    for atoms, fragment_type in candidates:
+        residual_atoms = tuple(atom for atom in atoms if atom not in assigned)
+        if not residual_atoms:
+            continue
+        partition.append((residual_atoms, fragment_type))
+        assigned.update(residual_atoms)
+
+    missing_atoms = set(range(mol.GetNumAtoms())).difference(assigned)
+    for component in connected_components_for_atoms(mol, missing_atoms):
+        partition.append((component, "frag"))
+
+    partition.sort(key=lambda item: (min(item[0]), len(item[0]), item[0], item[1]))
+    ordered_fragments = [atoms for atoms, _ in partition]
+    ordered_types = [fragment_type for _, fragment_type in partition]
+    return ordered_fragments, ordered_types
+
+
+def _cluster_priority(item):
+    atoms, fragment_type = item
+    type_priority = 0 if fragment_type == "split_frag" else 1
+    return (type_priority, -len(atoms), min(atoms), atoms, fragment_type)
+
+
+def connected_components_for_atoms(mol, atom_ids):
+    """Return connected components induced by atom_ids."""
+    remaining = set(atom_ids)
+    components = []
+    while remaining:
+        start = min(remaining)
+        stack = [start]
+        remaining.remove(start)
+        component = []
+        while stack:
+            atom_id = stack.pop()
+            component.append(atom_id)
+            atom = mol.GetAtomWithIdx(int(atom_id))
+            for neighbor in atom.GetNeighbors():
+                neighbor_id = int(neighbor.GetIdx())
+                if neighbor_id in remaining:
+                    remaining.remove(neighbor_id)
+                    stack.append(neighbor_id)
+        components.append(tuple(sorted(component)))
+    return sorted(components, key=lambda atoms: (min(atoms), len(atoms), atoms))
 
 
 def order_fragments_deterministically(cluster):
