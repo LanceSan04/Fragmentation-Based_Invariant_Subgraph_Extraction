@@ -3,6 +3,14 @@
 The load-convert-save pattern is based on Group Graph's data_loader.py.
 Dual-view graph construction, metadata, splitting, and cache validation are
 project-specific.
+
+Run the preprocessing pipeline from the repository root with:
+
+    .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\experiment.yaml
+
+To also verify the saved .pt files can be loaded and batched, add:
+
+    --validate-loaders
 """
 
 import argparse
