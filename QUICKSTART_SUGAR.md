@@ -5,7 +5,7 @@
 ### Step 1: Prepare Data (If Needed)
 ```bash
 # Skip if you already have processed data
-python src/data/preprocess.py --config configs/bbbp.yaml
+python src/data/preprocess.py --config configs/experiment.yaml
 ```
 
 ### Step 2: Validate Pipeline (Optional but Recommended)

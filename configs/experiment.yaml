@@ -78,13 +78,12 @@ processed_dir: data/processed/bbbp
 # Supported file types:
 #   .csv, .tsv, .json, .jsonl
 #
-raw_path: data/raw/bbbp/bbbp.csv
+raw_path: data/raw/BBBP.csv
 
 # Record key names used by process_record(). These must match either the inline
 # records below or the real dataset file columns/keys.
 smiles_key: smiles
 label_key: p_np
-split_key: split
 environment_key: environment
 molecule_id_key: num
 
@@ -147,7 +146,7 @@ auto_split: True
 split_method: "random"  # Options: "random", "scaffold"
 train_ratio: 0.7
 valid_ratio: 0.15
-split_seed: 42  # For reproducibility
+split_seed: 10  # For reproducibility
 
 
 # Future model/training options will eventually live in this same config, but
