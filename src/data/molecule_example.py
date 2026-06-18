@@ -8,7 +8,7 @@ from rdkit import Chem
 
 from src.data.atom_graph import mol_to_atom_graph
 from src.fragmentation import build_fragmenter
-from src.fragmentation.group_graph import build_fragment_edge_features
+from src.fragmentation.group_graph import FRAGMENT_EDGE_FEATURE_DIM, build_fragment_edge_features
 from src.models.fragment_pooler import FragmentPooler
 
 
@@ -51,6 +51,7 @@ class MoleculeExample:
             "directed_edge_to_bond",
             "fragment_x_static",
             "fragment_edge_index",
+            "fragment_edge_attr",
             "atom_to_fragment",
             "fragment_to_atoms",
             "fragment_to_atom_index",
@@ -79,6 +80,11 @@ class MoleculeExample:
             raise ValueError("fragment_edge_to_bond_index must contain one value per fragment edge")
         if self.fragment_edge_to_attachment_atoms.shape != (2, num_fragment_edges):
             raise ValueError("fragment_edge_to_attachment_atoms must have shape [2, num_edges]")
+        if self.fragment_edge_attr.shape != (num_fragment_edges, FRAGMENT_EDGE_FEATURE_DIM):
+            raise ValueError(
+                "fragment_edge_attr must have shape "
+                f"({num_fragment_edges}, {FRAGMENT_EDGE_FEATURE_DIM})"
+            )
         if self.fragment_to_atom_index.dim() != 2 or self.fragment_to_atom_index.size(0) != 2:
             raise ValueError("fragment_to_atom_index must have shape [2, num_memberships]")
 

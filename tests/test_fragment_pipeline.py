@@ -89,6 +89,31 @@ class FragmentPipelineTests(unittest.TestCase):
                 data.fragment_to_atom_index[0] == fragment_id
             ]
             self.assertTrue(torch.all(data.atom_to_fragment[atoms] == fragment_id))
+            self.assert_fragment_atoms_connected(data, atoms)
+
+    def test_group_graph_splits_disconnected_repaired_fragments(self):
+        data = self.build_data("[Na+].[Na+].[Na+]", "group_graph")
+
+        self.assertEqual(data.fragment_x_static.size(0), 3)
+        self.assertEqual(data.fragment_smiles, ["[Na+]", "[Na+]", "[Na+]"])
+        for fragment_id in range(data.fragment_x_static.size(0)):
+            atoms = data.fragment_to_atom_index[1][
+                data.fragment_to_atom_index[0] == fragment_id
+            ]
+            self.assertEqual(atoms.numel(), 1)
+            self.assert_fragment_atoms_connected(data, atoms)
+
+    def test_molecule_example_validates_fragment_edge_attr_shape(self):
+        example = build_molecule_example(
+            "CCOC(=O)C",
+            label=1,
+            molecule_id="bad_fragment_edge_attr",
+            fragmenter=build_fragmenter("group_graph"),
+        )
+        example.fragment_edge_attr = example.fragment_edge_attr[:, :-1]
+
+        with self.assertRaisesRegex(ValueError, "fragment_edge_attr"):
+            example.validate()
 
     def assert_all_fragment_edges_reconstruct_original_atom_graph(self, fragmentation):
         data = self.build_data("CCOC(=O)C", fragmentation)
@@ -156,6 +181,37 @@ class FragmentPipelineTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "config_hash"):
                 build_split_dataloaders(tmp_dir, config)
+
+    def test_dataloader_allows_non_preprocessing_config_changes(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = {
+                "dataset": "hash_scope_test",
+                "preprocess_version": "0.1.0",
+                "fragmentation": "group_graph",
+                "pooling": "mean_atom_and_internal_bond",
+                "processed_dir": tmp_dir,
+                "smiles_key": "smiles",
+                "label_key": "label",
+                "molecule_id_key": "molecule_id",
+                "strict": False,
+                "debug": False,
+                "batch_size": 1,
+                "splits": {
+                    "train": [
+                        {"molecule_id": "mol1", "smiles": "CC", "label": 1},
+                        {"molecule_id": "mol2", "smiles": "CCC", "label": 0},
+                    ]
+                },
+            }
+            run_preprocessing(config)
+
+            changed_loader_config = dict(config)
+            changed_loader_config["batch_size"] = 2
+            loaders = build_split_dataloaders(tmp_dir, changed_loader_config)
+
+            self.assertIn("train", loaders)
+            batch = next(iter(loaders["train"]))
+            validate_dataloader_batch(batch)
 
     def test_preprocessing_writes_failure_report_for_skipped_records(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -230,6 +286,74 @@ class FragmentPipelineTests(unittest.TestCase):
             sorted(reconstructed[1].bond_ids.tolist()),
             sorted(data_list[1].bond_ids.tolist()),
         )
+
+    def test_reconstructed_batch_offsets_directed_edge_to_bond(self):
+        data_list = [
+            self.build_data("CCOC(=O)C", "group_graph"),
+            self.build_data("CCOC(=O)C", "group_graph"),
+        ]
+        reconstructed = []
+        for data in data_list:
+            mask = torch.ones(data.fragment_edge_index.size(1), dtype=torch.bool)
+            reconstructed.append(reconstruct_atom_graph(data, mask))
+
+        batch = Batch.from_data_list(reconstructed)
+        first_num_directed_edges = reconstructed[0].edge_index.size(1)
+        first_num_bonds = reconstructed[0].bond_attr.size(0)
+
+        self.assertTrue(
+            torch.all(batch.directed_edge_to_bond[:first_num_directed_edges] < first_num_bonds)
+        )
+        self.assertTrue(
+            torch.all(batch.directed_edge_to_bond[first_num_directed_edges:] >= first_num_bonds)
+        )
+        self.assertLess(int(batch.directed_edge_to_bond.max()), batch.bond_attr.size(0))
+
+    def test_partial_reconstruction_keeps_attachment_provenance_unoffset(self):
+        data = self.build_data("CCOC(=O)C", "group_graph")
+        mask = torch.zeros(data.fragment_edge_index.size(1), dtype=torch.bool)
+        mask[1] = True
+
+        reconstructed = reconstruct_atom_graph(data, mask)
+        self.assertEqual(reconstructed.selected_original_atom_indices.tolist(), [2, 3, 4])
+        self.assertEqual(reconstructed.selected_attachment_atoms.tolist(), [[2], [3]])
+        self.assertEqual(reconstructed.selected_attachment_node_index.tolist(), [[0], [1]])
+        self.assertGreater(
+            int(reconstructed.selected_attachment_atoms.max()),
+            reconstructed.x.size(0) - 1,
+        )
+        self.assertLess(
+            int(reconstructed.selected_attachment_node_index.max()),
+            reconstructed.x.size(0),
+        )
+
+        batch = Batch.from_data_list([reconstructed, reconstructed])
+        self.assertEqual(batch.selected_attachment_atoms.tolist(), [[2, 2], [3, 3]])
+        self.assertEqual(batch.selected_attachment_node_index.tolist(), [[0, 3], [1, 4]])
+        self.assertLess(int(batch.selected_attachment_node_index.max()), batch.x.size(0))
+
+    def assert_fragment_atoms_connected(self, data, atoms):
+        atoms = set(int(atom_id) for atom_id in atoms.tolist())
+        if len(atoms) <= 1:
+            return
+
+        adjacency = {atom_id: set() for atom_id in atoms}
+        for src, dst in data.bond_index.t().tolist():
+            if src in atoms and dst in atoms:
+                adjacency[src].add(dst)
+                adjacency[dst].add(src)
+
+        start = min(atoms)
+        seen = {start}
+        stack = [start]
+        while stack:
+            atom_id = stack.pop()
+            for neighbor in adjacency[atom_id]:
+                if neighbor not in seen:
+                    seen.add(neighbor)
+                    stack.append(neighbor)
+
+        self.assertEqual(seen, atoms)
 
 
 if __name__ == "__main__":

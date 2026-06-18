@@ -7,8 +7,35 @@ from torch_geometric.data import Batch, Data
 class ReconstructedAtomData(Data):
     """Atom-level graph reconstructed from selected fragment evidence."""
 
+    @property
+    def num_bonds(self):
+        if hasattr(self, "bond_attr") and self.bond_attr is not None:
+            return int(self.bond_attr.size(0))
+        return 0
+
+    def __inc__(self, key, value, *args, **kwargs):
+        if key == "bond_index":
+            return self.num_nodes
+        if key == "directed_edge_to_bond":
+            return self.num_bonds
+        if key == "selected_attachment_node_index":
+            return self.num_nodes
+        if key in {
+            "atom_ids",
+            "bond_ids",
+            "selected_fragment_ids",
+            "selected_fragment_edge_ids",
+            "selected_attachment_bond_ids",
+            "selected_attachment_bond_indices",
+            "selected_attachment_atoms",
+            "reconstructed_original_bond_indices",
+            "selected_original_atom_indices",
+        }:
+            return 0
+        return super().__inc__(key, value, *args, **kwargs)
+
     def __cat_dim__(self, key, value, *args, **kwargs):
-        if key in {"bond_index", "selected_attachment_atoms"}:
+        if key in {"bond_index", "selected_attachment_atoms", "selected_attachment_node_index"}:
             return 1
         return super().__cat_dim__(key, value, *args, **kwargs)
 
@@ -124,6 +151,10 @@ def reconstruct_atom_graph(
         if selected_unique_bonds.numel()
         else torch.empty((2, 0), dtype=torch.long, device=selected_atoms.device),
     )
+    selected_attachment_node_index = relabel_attachment_atoms(
+        selected_atoms,
+        selected_attachment_atoms,
+    )
 
     directed_edges = []
     directed_edge_attrs = []
@@ -162,6 +193,7 @@ def reconstruct_atom_graph(
         selected_attachment_bond_ids=selected_attachment_bond_ids,
         selected_attachment_bond_indices=selected_bond_indices,
         selected_attachment_atoms=selected_attachment_atoms,
+        selected_attachment_node_index=selected_attachment_node_index,
         reconstructed_bond_is_internal=reconstructed_bond_is_internal,
         reconstructed_bond_is_selected_boundary=reconstructed_bond_is_selected_boundary,
         reconstructed_original_bond_indices=selected_unique_bonds,
@@ -182,6 +214,28 @@ def relabel_reconstructed_atoms(atom_ids, edge_index):
         relabeled[0, col] = old_to_new[int(edge_index[0, col])]
         relabeled[1, col] = old_to_new[int(edge_index[1, col])]
     return relabeled, atom_ids
+
+
+def relabel_attachment_atoms(selected_atoms, selected_attachment_atoms):
+    """Map original attachment atom IDs into reconstructed node indices."""
+    if selected_attachment_atoms.numel() == 0:
+        return torch.empty((2, 0), dtype=torch.long, device=selected_attachment_atoms.device)
+
+    selected_atoms = torch.as_tensor(
+        selected_atoms,
+        dtype=torch.long,
+        device=selected_attachment_atoms.device,
+    )
+    old_to_new = {int(old_id): new_id for new_id, old_id in enumerate(selected_atoms.tolist())}
+
+    relabeled = torch.empty_like(selected_attachment_atoms)
+    for row in range(selected_attachment_atoms.size(0)):
+        for col in range(selected_attachment_atoms.size(1)):
+            atom_id = int(selected_attachment_atoms[row, col])
+            if atom_id not in old_to_new:
+                raise ValueError("selected attachment atom is not in the reconstructed atom set")
+            relabeled[row, col] = old_to_new[atom_id]
+    return relabeled
 
 
 def reconstruct_batch(batch, selected_fragment_edge_mask):

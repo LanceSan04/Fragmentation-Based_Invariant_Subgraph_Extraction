@@ -88,6 +88,8 @@ def validate_fragmentation(result: FragmentationResult, mol):
         atom_tensor = torch.as_tensor(atoms, dtype=torch.long)
         if atom_tensor.numel() == 0:
             raise ValueError(f"fragment {fragment_id} is empty")
+        if not atoms_are_connected(mol, atom_tensor.tolist()):
+            raise ValueError(f"fragment {fragment_id} is disconnected")
         for atom_id in atom_tensor.tolist():
             if atom_id < 0 or atom_id >= num_atoms:
                 raise ValueError(f"fragment {fragment_id} contains invalid atom {atom_id}")
@@ -136,6 +138,26 @@ def validate_fragmentation(result: FragmentationResult, mol):
             )
 
     return result
+
+
+def atoms_are_connected(mol, atom_ids):
+    """Return True when atom_ids induce one connected component in mol."""
+    atom_ids = set(int(atom_id) for atom_id in atom_ids)
+    if len(atom_ids) <= 1:
+        return True
+
+    start = min(atom_ids)
+    visited = {start}
+    stack = [start]
+    while stack:
+        atom = mol.GetAtomWithIdx(int(stack.pop()))
+        for neighbor in atom.GetNeighbors():
+            neighbor_id = int(neighbor.GetIdx())
+            if neighbor_id in atom_ids and neighbor_id not in visited:
+                visited.add(neighbor_id)
+                stack.append(neighbor_id)
+
+    return visited == atom_ids
 
 
 def fragment_smiles_from_atom_sets(mol, fragment_to_atoms):

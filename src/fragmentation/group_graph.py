@@ -13,6 +13,9 @@ from src.fragmentation.base import (
 from src.fragmentation.molecule_fragment import find_clusters
 
 
+FRAGMENT_EDGE_FEATURE_DIM = (2 * ATOM_FDIM) + BOND_FDIM + 2
+
+
 class GroupGraphFragmenter(Fragmenter):
     """Project-facing Group Graph fragmenter."""
 
@@ -84,8 +87,9 @@ def partition_overlapping_clusters(mol, cluster):
         residual_atoms = tuple(atom for atom in atoms if atom not in assigned)
         if not residual_atoms:
             continue
-        partition.append((residual_atoms, fragment_type))
-        assigned.update(residual_atoms)
+        for component in connected_components_for_atoms(mol, residual_atoms):
+            partition.append((component, fragment_type))
+            assigned.update(component)
 
     missing_atoms = set(range(mol.GetNumAtoms())).difference(assigned)
     for component in connected_components_for_atoms(mol, missing_atoms):
@@ -142,9 +146,8 @@ def build_fragment_edge_features(
 ):
     """Build attachment-atom, bond, and fragment-size edge features."""
     num_edges = fragmentation_result.num_fragment_edges
-    feature_dim = (2 * ATOM_FDIM) + BOND_FDIM + 2
     if num_edges == 0:
-        return torch.empty((0, feature_dim), dtype=torch.float32)
+        return torch.empty((0, FRAGMENT_EDGE_FEATURE_DIM), dtype=torch.float32)
 
     rows = []
     for edge_id in range(num_edges):
