@@ -13,3 +13,7 @@ for atom in mol.GetAtoms():
         atom.GetExplicitValence(),
         atom.GetFormalCharge(),
     )
+
+# Check chemical validity of molecule 
+# Also determines properties of molecule needed for RDKit functions
+Chem.SanitizeMol(mol)

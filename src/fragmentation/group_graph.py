@@ -59,14 +59,18 @@ def build_fragmentation_result(mol, cluster):
 
 
 def partition_overlapping_clusters(mol, cluster):
-    """Resolve upstream Group Graph overlaps into a molecule-wide partition.
+    """Resolve raw Group Graph cluster overlaps into a molecule-wide partition.
 
-    The copied Group Graph rules can emit overlapping split fragments for some
-    functional groups. This project requires each atom to belong to exactly one
-    fragment for pooling, batching, and reconstruction, so higher-priority
-    clusters claim atoms first and lower-priority clusters keep only unclaimed
-    atoms. Priority is project-specific: split fragments first, larger clusters
-    first, then stable atom-index tie-breakers. Any atom missed by upstream
+    The copied Group Graph `find_clusters` output can contain overlapping candidate
+    cluster atom sets. Original Group Graph collapses those overlaps through
+    `atom_cls`, where later matching clusters overwrite earlier assignments. This
+    project instead makes the overlap policy explicit because pooling, batching, and
+    atom-level reconstruction require every atom to belong to exactly one fragment
+    with predictable provenance.
+
+    Higher-priority clusters claim atoms first and lower-priority clusters keep only
+    unclaimed atoms. Priority is project-specific: split fragments first, larger
+    clusters first, then stable atom-index tie-breakers. Any atom missed by upstream
     rules is added as a connected fallback fragment.
     """
     candidates = sorted(
