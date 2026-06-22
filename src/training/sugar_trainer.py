@@ -1,9 +1,13 @@
 """Training pipeline for SuGAr ensemble with multi-view fragment learning."""
 
 import torch
-import torch.nn as nn
 from torch.optim import Adam
 from tqdm import tqdm
+
+from src.losses.prediction import prediction_loss
+from src.losses.supervised_contrastive import supervised_contrastive_loss
+from src.losses.diversity import pairwise_diversity_loss
+from src.losses.irm import invariant_risk_loss
 
 
 class SuGARTrainer:
@@ -15,6 +19,11 @@ class SuGARTrainer:
         device="cpu",
         learning_rate=0.001,
         weight_decay=0.0,
+        lambda_contrast=1.0,
+        lambda_diversity=1.0,
+        lambda_irm=1.0,
+        contrast_temperature=0.5,
+        contrast_sampling="mul",
     ):
         """
         Args:
@@ -22,11 +31,20 @@ class SuGARTrainer:
             device: Device to train on (cpu/cuda)
             learning_rate: Learning rate for optimizer
             weight_decay: Weight decay for regularization
+            lambda_contrast: Weight for supervised contrastive loss (0 disables it)
+            lambda_diversity: Weight for pairwise diversity loss (0 disables it)
+            lambda_irm: Weight for IRM penalty (0 disables it)
+            contrast_temperature: Temperature for supervised contrastive loss
+            contrast_sampling: Sampling mode for contrastive loss ('mul', 'var', 'cnc')
         """
         self.model = model.to(device)
         self.device = device
         self.optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-        self.loss_fn = nn.CrossEntropyLoss()
+        self.lambda_contrast = lambda_contrast
+        self.lambda_diversity = lambda_diversity
+        self.lambda_irm = lambda_irm
+        self.contrast_temperature = contrast_temperature
+        self.contrast_sampling = contrast_sampling
 
     def train_epoch(self, train_loader):
         """Train for one epoch.
@@ -44,12 +62,25 @@ class SuGARTrainer:
         total = 0
         num_batches = 0
 
+        use_aux = self.lambda_contrast > 0 or self.lambda_diversity > 0 or self.lambda_irm > 0
+
+        # Pre-generate random binary environment assignments for the full dataset,
+        # mirroring SuGAr main.py. Sliced per-batch below.
+        if self.lambda_irm > 0:
+            dataset_size = len(train_loader.dataset)
+            env_idx = (torch.sigmoid(torch.randn(dataset_size)) > 0.5).long()
+        else:
+            env_idx = None
+
         pbar = tqdm(train_loader, desc="Training")
-        for batch in pbar:
+        for step, batch in enumerate(pbar):
             batch = batch.to(self.device)
 
-            # Forward pass
-            predictions = self.model(batch)
+            # Forward pass — collect intermediates only when auxiliary losses are active
+            if use_aux:
+                predictions, intermediates = self.model(batch, return_intermediates=True)
+            else:
+                predictions = self.model(batch)
 
             # Get labels
             labels = batch.y
@@ -57,8 +88,40 @@ class SuGARTrainer:
                 labels = labels.squeeze(-1)
             labels = labels.long()
 
-            # Compute loss
-            loss = self.loss_fn(predictions, labels)
+            # Prediction loss
+            loss = prediction_loss(predictions, labels)
+
+            if use_aux:
+                # Supervised contrastive loss over pooled per-view embeddings.
+                # Concatenate views along the batch axis so every molecule
+                # appears once per view, giving more positive/negative pairs.
+                if self.lambda_contrast > 0:
+                    all_emb = torch.cat(intermediates["embeddings"], dim=0)   # [N*V, D]
+                    all_labels = labels.repeat(self.model.num_views)           # [N*V]
+                    loss = loss + self.lambda_contrast * supervised_contrastive_loss(
+                        all_emb,
+                        all_labels,
+                        temperature=self.contrast_temperature,
+                        sampling=self.contrast_sampling,
+                    )
+
+                # Pairwise diversity loss over aligned fragment-edge score vectors.
+                if self.lambda_diversity > 0 and len(intermediates["fragment_scores"]) > 1:
+                    loss = loss + self.lambda_diversity * pairwise_diversity_loss(
+                        intermediates["fragment_scores"]
+                    )
+
+                # IRM penalty applied to each view's invariant-subgraph logits,
+                # averaged across views (mirrors SuGAr: irm applied to causal_pred).
+                if self.lambda_irm > 0:
+                    batch_size = labels.size(0)
+                    start = step * train_loader.batch_size
+                    batch_env = env_idx[start: start + batch_size].to(self.device)
+                    irm_terms = []
+                    for view_logits in intermediates["per_view_logits"]:
+                        irm_terms.append(invariant_risk_loss(view_logits, labels, batch_env))
+                    if irm_terms:
+                        loss = loss + self.lambda_irm * torch.stack(irm_terms).mean()
 
             # Backward pass
             self.optimizer.zero_grad()
@@ -68,13 +131,12 @@ class SuGARTrainer:
 
             total_loss += loss.item()
             num_batches += 1
-            
+
             # Compute running accuracy
             pred_labels = predictions.argmax(dim=-1)
             correct += (pred_labels == labels).sum().item()
             total += labels.size(0)
-            
-            # Update progress bar with both loss and live accuracy
+
             current_acc = correct / total if total > 0 else 0.0
             pbar.set_postfix({"loss": f"{loss.item():.4f}", "acc": f"{current_acc:.4f}"})
 
@@ -112,8 +174,7 @@ class SuGARTrainer:
                 labels = labels.squeeze(-1)
             labels = labels.long()
 
-            # Compute loss
-            loss = self.loss_fn(predictions, labels)
+            loss = prediction_loss(predictions, labels)
             total_loss += loss.item()
 
             # Compute accuracy

@@ -31,19 +31,24 @@ class AtomClassifier(nn.Module):
             nn.Linear(2 * hidden_dim, num_classes),
         )
 
-    def forward(self, data):
+    def forward(self, data, return_embeddings=False):
         """
         Args:
             data: Batched PyG Data (reconstructed atom subgraphs)
+            return_embeddings: If True, also return graph-level pooled embedding.
 
         Returns:
             logits: [batch_size, num_classes]
+            h_graph: (optional) [batch_size, hidden_dim] — only when return_embeddings=True
         """
         edge_attr = data.edge_attr
         if hasattr(data, "edge_weight") and data.edge_weight is not None:
             edge_attr = edge_attr * data.edge_weight.view(-1, 1)
         _, h_graph = self.gnn(data.x, data.edge_index, data.batch, edge_attr=edge_attr)
-        return self.pred_head(h_graph)
+        logits = self.pred_head(h_graph)
+        if return_embeddings:
+            return logits, h_graph
+        return logits
 
 
 class SuGAREnsemble(nn.Module):
@@ -119,7 +124,7 @@ class SuGAREnsemble(nn.Module):
         fragment_batch = build_fragment_graph_batch(batch_data).to(device)
 
         all_logits = []
-        intermediates = {"fragment_masks": [], "fragment_scores": [], "atom_graphs": []}
+        intermediates = {"fragment_masks": [], "fragment_scores": [], "atom_graphs": [], "embeddings": [], "per_view_logits": []}
 
         for view_idx in range(self.num_views):
             edge_scores, bool_mask = self.fragment_maskers[view_idx](fragment_batch)
@@ -128,13 +133,16 @@ class SuGAREnsemble(nn.Module):
                 bool_mask,
                 selected_fragment_edge_weight=edge_scores,
             ).to(device)
-            logits = self.atom_classifiers[view_idx](atom_batch)
-            all_logits.append(logits)
-
             if return_intermediates:
+                logits, h_graph = self.atom_classifiers[view_idx](atom_batch, return_embeddings=True)
                 intermediates["fragment_masks"].append(bool_mask)
                 intermediates["fragment_scores"].append(edge_scores)
                 intermediates["atom_graphs"].append(atom_batch)
+                intermediates["embeddings"].append(h_graph)
+                intermediates["per_view_logits"].append(logits)
+            else:
+                logits = self.atom_classifiers[view_idx](atom_batch)
+            all_logits.append(logits)
 
         predictions = self.aggregator(torch.cat(all_logits, dim=-1))
 
