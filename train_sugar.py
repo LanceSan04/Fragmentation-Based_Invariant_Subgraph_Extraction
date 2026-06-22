@@ -77,9 +77,13 @@ def main(args):
     first_batch = next(iter(train_loader))
     atom_feat_dim = first_batch.x.size(1)
     fragment_feat_dim = first_batch.fragment_x_static.size(1) if hasattr(first_batch, 'fragment_x_static') else atom_feat_dim
+    atom_edge_dim = first_batch.edge_attr.size(1)
+    fragment_edge_dim = first_batch.fragment_edge_attr.size(1)
     
     print(f"  Atom feature dimension: {atom_feat_dim}")
     print(f"  Fragment feature dimension: {fragment_feat_dim}")
+    print(f"  Atom edge feature dimension: {atom_edge_dim}")
+    print(f"  Fragment edge feature dimension: {fragment_edge_dim}")
     
     model = SuGAREnsemble(
         atom_feature_dim=atom_feat_dim,
@@ -90,6 +94,8 @@ def main(args):
         edge_ratio=args.edge_ratio,
         num_views=1,  # Single view for now
         dropout=args.dropout,
+        fragment_edge_dim=fragment_edge_dim,
+        atom_edge_dim=atom_edge_dim,
     )
 
     # Build trainer

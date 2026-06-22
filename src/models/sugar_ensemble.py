@@ -5,7 +5,7 @@ import torch.nn as nn
 from src.models.fragment_graph_ciga import FragmentMasker, SimpleGNN
 from src.models.fragment_graph import build_fragment_graph_batch
 from src.models.atom_reconstructor import reconstruct_batch
-from src.data.atom_graph import ATOM_FDIM
+from src.data.atom_graph import ATOM_FDIM, BOND_FDIM
 
 class AtomClassifier(nn.Module):
     """GNN classifier for atom-level invariant subgraphs.
@@ -14,9 +14,17 @@ class AtomClassifier(nn.Module):
     subgraphs already pruned to the invariant fragment selection.
     """
 
-    def __init__(self, input_dim, hidden_dim=128, num_layers=3, dropout=0.0, num_classes=2):
+    def __init__(
+        self,
+        input_dim,
+        hidden_dim=128,
+        num_layers=3,
+        dropout=0.0,
+        num_classes=2,
+        edge_dim=BOND_FDIM,
+    ):
         super().__init__()
-        self.gnn = SimpleGNN(input_dim, hidden_dim, num_layers, dropout)
+        self.gnn = SimpleGNN(input_dim, hidden_dim, num_layers, dropout, edge_dim=edge_dim)
         self.pred_head = nn.Sequential(
             nn.Linear(hidden_dim, 2 * hidden_dim),
             nn.ReLU(),
@@ -31,7 +39,10 @@ class AtomClassifier(nn.Module):
         Returns:
             logits: [batch_size, num_classes]
         """
-        _, h_graph = self.gnn(data.x, data.edge_index, data.batch)
+        edge_attr = data.edge_attr
+        if hasattr(data, "edge_weight") and data.edge_weight is not None:
+            edge_attr = edge_attr * data.edge_weight.view(-1, 1)
+        _, h_graph = self.gnn(data.x, data.edge_index, data.batch, edge_attr=edge_attr)
         return self.pred_head(h_graph)
 
 
@@ -55,6 +66,8 @@ class SuGAREnsemble(nn.Module):
         edge_ratio=0.5,
         num_views=1,
         dropout=0.0,
+        fragment_edge_dim=None,
+        atom_edge_dim=BOND_FDIM,
     ):
         super().__init__()
         if fragment_feature_dim is None:
@@ -68,6 +81,7 @@ class SuGAREnsemble(nn.Module):
                 num_layers=num_gnn_layers,
                 dropout=dropout,
                 ratio=edge_ratio,
+                edge_dim=fragment_edge_dim,
             )
             for _ in range(num_views)
         ])
@@ -79,6 +93,7 @@ class SuGAREnsemble(nn.Module):
                 num_layers=num_gnn_layers,
                 dropout=dropout,
                 num_classes=num_classes,
+                edge_dim=atom_edge_dim,
             )
             for _ in range(num_views)
         ])
@@ -104,16 +119,21 @@ class SuGAREnsemble(nn.Module):
         fragment_batch = build_fragment_graph_batch(batch_data).to(device)
 
         all_logits = []
-        intermediates = {"fragment_masks": [], "atom_graphs": []}
+        intermediates = {"fragment_masks": [], "fragment_scores": [], "atom_graphs": []}
 
         for view_idx in range(self.num_views):
-            _, bool_mask = self.fragment_maskers[view_idx](fragment_batch)
-            atom_batch = reconstruct_batch(batch_data, bool_mask).to(device)
+            edge_scores, bool_mask = self.fragment_maskers[view_idx](fragment_batch)
+            atom_batch = reconstruct_batch(
+                batch_data,
+                bool_mask,
+                selected_fragment_edge_weight=edge_scores,
+            ).to(device)
             logits = self.atom_classifiers[view_idx](atom_batch)
             all_logits.append(logits)
 
             if return_intermediates:
                 intermediates["fragment_masks"].append(bool_mask)
+                intermediates["fragment_scores"].append(edge_scores)
                 intermediates["atom_graphs"].append(atom_batch)
 
         predictions = self.aggregator(torch.cat(all_logits, dim=-1))
@@ -134,5 +154,9 @@ class SuGAREnsemble(nn.Module):
         """
         device = batch_data.x.device
         fragment_batch = build_fragment_graph_batch(batch_data).to(device)
-        _, bool_mask = self.fragment_maskers[view_idx](fragment_batch)
-        return reconstruct_batch(batch_data, bool_mask)
+        edge_scores, bool_mask = self.fragment_maskers[view_idx](fragment_batch)
+        return reconstruct_batch(
+            batch_data,
+            bool_mask,
+            selected_fragment_edge_weight=edge_scores,
+        )
