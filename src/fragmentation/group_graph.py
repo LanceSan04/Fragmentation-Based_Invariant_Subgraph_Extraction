@@ -4,8 +4,16 @@ import torch
 from rdkit import Chem
 
 from src.data.atom_graph import ATOM_FDIM, BOND_FDIM, atom_features, bond_features
-from src.fragmentation.base import FragmentationResult, Fragmenter, validate_fragmentation
+from src.fragmentation.base import (
+    FragmentationResult,
+    Fragmenter,
+    fragment_smiles_from_atom_sets,
+    validate_fragmentation,
+)
 from src.fragmentation.molecule_fragment import find_clusters
+
+
+FRAGMENT_EDGE_FEATURE_DIM = (2 * ATOM_FDIM) + BOND_FDIM + 2
 
 
 class GroupGraphFragmenter(Fragmenter):
@@ -27,7 +35,7 @@ class GroupGraphFragmenter(Fragmenter):
 
 def build_fragmentation_result(mol, cluster):
     """Convert upstream Group Graph clusters into FragmentationResult."""
-    ordered_fragments, ordered_types = order_fragments_deterministically(cluster)
+    ordered_fragments, ordered_types = partition_overlapping_clusters(mol, cluster)
     num_atoms = mol.GetNumAtoms()
 
     atom_to_fragment = torch.empty(num_atoms, dtype=torch.long)
@@ -49,7 +57,76 @@ def build_fragmentation_result(mol, cluster):
         fragment_edge_to_bond_index=fragment_edge_to_bond_index,
         fragment_edge_to_attachment_atoms=attachments,
         fragment_types=ordered_types,
+        fragment_smiles=fragment_smiles_from_atom_sets(mol, fragment_to_atoms),
     )
+
+
+def partition_overlapping_clusters(mol, cluster):
+    """Resolve raw Group Graph cluster overlaps into a molecule-wide partition.
+
+    The copied Group Graph `find_clusters` output can contain overlapping candidate
+    cluster atom sets. Original Group Graph collapses those overlaps through
+    `atom_cls`, where later matching clusters overwrite earlier assignments. This
+    project instead makes the overlap policy explicit because pooling, batching, and
+    atom-level reconstruction require every atom to belong to exactly one fragment
+    with predictable provenance.
+
+    Higher-priority clusters claim atoms first and lower-priority clusters keep only
+    unclaimed atoms. Priority is project-specific: split fragments first, larger
+    clusters first, then stable atom-index tie-breakers. Any atom missed by upstream
+    rules is added as a connected fallback fragment.
+    """
+    candidates = sorted(
+        ((tuple(sorted(atoms)), fragment_type) for atoms, fragment_type in cluster.items()),
+        key=_cluster_priority,
+    )
+
+    assigned = set()
+    partition = []
+    for atoms, fragment_type in candidates:
+        residual_atoms = tuple(atom for atom in atoms if atom not in assigned)
+        if not residual_atoms:
+            continue
+        for component in connected_components_for_atoms(mol, residual_atoms):
+            partition.append((component, fragment_type))
+            assigned.update(component)
+
+    missing_atoms = set(range(mol.GetNumAtoms())).difference(assigned)
+    for component in connected_components_for_atoms(mol, missing_atoms):
+        partition.append((component, "frag"))
+
+    partition.sort(key=lambda item: (min(item[0]), len(item[0]), item[0], item[1]))
+    ordered_fragments = [atoms for atoms, _ in partition]
+    ordered_types = [fragment_type for _, fragment_type in partition]
+    return ordered_fragments, ordered_types
+
+
+def _cluster_priority(item):
+    atoms, fragment_type = item
+    type_priority = 0 if fragment_type == "split_frag" else 1
+    return (type_priority, -len(atoms), min(atoms), atoms, fragment_type)
+
+
+def connected_components_for_atoms(mol, atom_ids):
+    """Return connected components induced by atom_ids."""
+    remaining = set(atom_ids)
+    components = []
+    while remaining:
+        start = min(remaining)
+        stack = [start]
+        remaining.remove(start)
+        component = []
+        while stack:
+            atom_id = stack.pop()
+            component.append(atom_id)
+            atom = mol.GetAtomWithIdx(int(atom_id))
+            for neighbor in atom.GetNeighbors():
+                neighbor_id = int(neighbor.GetIdx())
+                if neighbor_id in remaining:
+                    remaining.remove(neighbor_id)
+                    stack.append(neighbor_id)
+        components.append(tuple(sorted(component)))
+    return sorted(components, key=lambda atoms: (min(atoms), len(atoms), atoms))
 
 
 def order_fragments_deterministically(cluster):
@@ -69,9 +146,8 @@ def build_fragment_edge_features(
 ):
     """Build attachment-atom, bond, and fragment-size edge features."""
     num_edges = fragmentation_result.num_fragment_edges
-    feature_dim = (2 * ATOM_FDIM) + BOND_FDIM + 2
     if num_edges == 0:
-        return torch.empty((0, feature_dim), dtype=torch.float32)
+        return torch.empty((0, FRAGMENT_EDGE_FEATURE_DIM), dtype=torch.float32)
 
     rows = []
     for edge_id in range(num_edges):

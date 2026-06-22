@@ -344,6 +344,7 @@ def find_clusters(mol):
         for j, x in enumerate(cluster):
             if i in x:
                 atom_cls[i] = j
+
     return cluster, atom_cls
 
 
@@ -372,6 +373,4 @@ def get_inter(mol):
 
 def atom_equal(a1, a2):
     return a1.GetSymbol() == a2.GetSymbol() and a1.GetFormalCharge() == a2.GetFormalCharge()
-
-
 

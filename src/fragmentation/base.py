@@ -17,6 +17,7 @@ class FragmentationResult:
     fragment_edge_to_bond_index: Any = None
     fragment_edge_to_attachment_atoms: Any = None
     fragment_types: Optional[Any] = None
+    fragment_smiles: Optional[Any] = None
 
     @property
     def num_fragments(self):
@@ -55,6 +56,11 @@ def validate_fragmentation(result: FragmentationResult, mol):
     if num_fragments == 0:
         raise ValueError("fragmentation must contain at least one fragment")
 
+    if result.fragment_types is not None and len(result.fragment_types) != num_fragments:
+        raise ValueError("fragment_types must contain one value per fragment")
+    if result.fragment_smiles is not None and len(result.fragment_smiles) != num_fragments:
+        raise ValueError("fragment_smiles must contain one value per fragment")
+
     if result.atom_to_fragment.shape != (num_atoms,):
         raise ValueError(
             f"atom_to_fragment must have shape ({num_atoms},), "
@@ -82,6 +88,8 @@ def validate_fragmentation(result: FragmentationResult, mol):
         atom_tensor = torch.as_tensor(atoms, dtype=torch.long)
         if atom_tensor.numel() == 0:
             raise ValueError(f"fragment {fragment_id} is empty")
+        if not atoms_are_connected(mol, atom_tensor.tolist()):
+            raise ValueError(f"fragment {fragment_id} is disconnected")
         for atom_id in atom_tensor.tolist():
             if atom_id < 0 or atom_id >= num_atoms:
                 raise ValueError(f"fragment {fragment_id} contains invalid atom {atom_id}")
@@ -130,3 +138,46 @@ def validate_fragmentation(result: FragmentationResult, mol):
             )
 
     return result
+
+
+def atoms_are_connected(mol, atom_ids):
+    """Return True when atom_ids induce one connected component in mol."""
+    atom_ids = set(int(atom_id) for atom_id in atom_ids)
+    if len(atom_ids) <= 1:
+        return True
+
+    start = min(atom_ids)
+    visited = {start}
+    stack = [start]
+    while stack:
+        atom = mol.GetAtomWithIdx(int(stack.pop()))
+        for neighbor in atom.GetNeighbors():
+            neighbor_id = int(neighbor.GetIdx())
+            if neighbor_id in atom_ids and neighbor_id not in visited:
+                visited.add(neighbor_id)
+                stack.append(neighbor_id)
+
+    return visited == atom_ids
+
+
+def fragment_smiles_from_atom_sets(mol, fragment_to_atoms):
+    """Return canonical fragment SMILES strings aligned with fragment_to_atoms."""
+    fragment_smiles = []
+    for atoms in fragment_to_atoms:
+        atom_ids = torch.as_tensor(atoms, dtype=torch.long).tolist()
+        fragment_smiles.append(
+            mol_fragment_to_smiles(mol, atom_ids)
+        )
+    return fragment_smiles
+
+
+def mol_fragment_to_smiles(mol, atom_ids):
+    """Build one fragment SMILES without mutating the canonical molecule."""
+    from rdkit import Chem
+
+    return Chem.MolFragmentToSmiles(
+        mol,
+        atomsToUse=[int(atom_id) for atom_id in atom_ids],
+        canonical=True,
+        isomericSmiles=True,
+    )

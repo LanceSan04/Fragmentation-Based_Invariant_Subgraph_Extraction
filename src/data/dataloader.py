@@ -12,6 +12,8 @@ import random
 import torch
 from torch_geometric.loader import DataLoader
 
+from src.data.config_hash import preprocessing_config_hash
+
 
 class ProcessedMoleculeDataset:
     """Sequence wrapper for one processed molecular split.
@@ -190,4 +192,5 @@ def _expected_metadata(config):
         value = _config_get(config, key, None)
         if value is not None:
             metadata[key] = value
+    metadata["config_hash"] = preprocessing_config_hash(config)
     return metadata
