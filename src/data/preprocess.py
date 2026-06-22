@@ -16,7 +16,6 @@ from pathlib import Path
 
 import torch
 import yaml
-import random
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -82,7 +81,7 @@ def process_record(record, config):
     if smiles is None:
         raise ValueError(f"Record is missing SMILES key {smiles_key!r}: {record!r}")
 
-    # _debug_print(config, f"Processing molecule: {smiles}")
+    _debug_print(config, f"Processing molecule: {smiles}")
     label = _record_get(record, label_key, None)
     label = _coerce_label(label)
     environment_or_group = _record_get(record, environment_key, None)
@@ -97,14 +96,14 @@ def process_record(record, config):
         fragmenter=fragmenter,
         pooling=_config_get(config, "pooling", "mean_atom_and_internal_bond"),
     )
-    # _debug_print(
-    #    config,
-    #    "Built molecule "
-    #    f"{smiles}: atoms={example.atom_x.size(0)}, "
-    #    f"bonds={example.bond_attr.size(0)}, "
-    #    f"fragments={example.fragment_x_static.size(0)}, "
-    #    f"fragment_edges={example.fragment_edge_index.size(1)}",
-    #)
+    _debug_print(
+        config,
+        "Built molecule "
+        f"{smiles}: atoms={example.atom_x.size(0)}, "
+        f"bonds={example.bond_attr.size(0)}, "
+        f"fragments={example.fragment_x_static.size(0)}, "
+        f"fragment_edges={example.fragment_edge_index.size(1)}",
+    )
     return example
 
 
@@ -116,7 +115,7 @@ def process_split(records, config):
 
     for index, record in enumerate(records):
         try:
-            # _debug_print(config, f"Record {index + 1}/{len(records)}")
+            _debug_print(config, f"Record {index + 1}/{len(records)}")
             examples.append(process_record(record, config))
         except Exception as exc:
             if strict:

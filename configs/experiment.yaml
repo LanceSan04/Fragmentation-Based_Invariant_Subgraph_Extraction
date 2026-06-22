@@ -69,7 +69,11 @@ fragment_feature_dim: 149
 #   processed_dir: data/processed/smoke/brics
 #   processed_dir: data/processed/bbbp/group_graph
 #   processed_dir: data/processed/bbbp/brics
-processed_dir: data/processed/bbbp
+processed_dir: data/processed/bbbp/group_graph
+
+# When strict is false, skipped records are written here for inspection.
+# If omitted, preprocess.py writes preprocess_failures.csv inside processed_dir.
+failure_report_path: data/processed/bbbp/group_graph/preprocess_failures.csv
 
 # Real dataset input path.
 # Leave this commented in smoke mode because the inline `splits:` block below
@@ -78,22 +82,34 @@ processed_dir: data/processed/bbbp
 # Supported file types:
 #   .csv, .tsv, .json, .jsonl
 #
-raw_path: data/raw/BBBP.csv
+raw_path: data/raw/bbbp/BBBP.csv
 
 # Record key names used by process_record(). These must match either the inline
 # records below or the real dataset file columns/keys.
 smiles_key: smiles
 label_key: p_np
+split_key: split
 environment_key: environment
 molecule_id_key: num
 
+# Used only when raw data has no split column. BBBP's common CSV format has
+# columns num,name,p_np,smiles and no official split field, so preprocessing
+# creates deterministic train/valid/test splits from these ratios.
+split_ratios:
+  train: 0.8
+  valid: 0.1
+  test: 0.1
+
 # Error handling.
-# Keep true for smoke tests so failures are loud and easy to debug.
+# Smoke tests can use true so failures are loud. Real datasets often contain
+# a few invalid/unparseable SMILES, so false skips bad rows and reports counts.
 strict: false
 
 # Progress logging for preprocess.py.
 # This is intentionally YAML-only; there is no CLI debug flag.
 debug: true
+debug_record_interval: 100
+debug_molecule_details: false
 
 # PyG DataLoader settings used by --validate-loaders.
 # train loaders shuffle automatically; valid/test loaders do not.
@@ -109,45 +125,29 @@ follow_batch:
   - fragment_x_static
 
 # Smoke-mode inline records grouped by split.
-# Supported split names for the current dataloader:
-#   train, valid, test
+# For smoke mode, comment out raw_path above, set dataset/processed_dir back to
+# smoke paths, and uncomment this block.
 #
-# Each record should include:
-#   molecule_id: stable identifier for inspection/debugging.
-#   smiles: molecule string parsed by RDKit.
-#   label: numeric label; preprocess.py coerces numeric values to float.
-#   environment: optional group/environment metadata.
-#
-# For real dataset mode, remove or comment out this entire `splits:` block and
-# use `raw_path` plus `split_key` above.
-
 # splits:
-#  train:
-#    - molecule_id: smoke_ester
-#      smiles: "CCOC(=O)C"
-#      label: 1
-#      environment: debug_train
-#    - molecule_id: smoke_benzene
-#      smiles: "c1ccccc1"
-#      label: 0
-#      environment: debug_train
-#  valid:
-#    - molecule_id: smoke_ethane
-#      smiles: "CC"
-#      label: 1
-#      environment: debug_valid
-#  test:
-#    - molecule_id: smoke_helium
-#      smiles: "[He]"
-#      label: 0
-#      environment: debug_test
-
-auto_split: True
-split_method: "random"  # Options: "random", "scaffold"
-train_ratio: 0.7
-valid_ratio: 0.15
-split_seed: 10  # For reproducibility
-
+#   train:
+#     - molecule_id: smoke_ester
+#       smiles: "CCOC(=O)C"
+#       label: 1
+#       environment: debug_train
+#     - molecule_id: smoke_benzene
+#       smiles: "c1ccccc1"
+#       label: 0
+#       environment: debug_train
+#   valid:
+#     - molecule_id: smoke_ethane
+#       smiles: "CC"
+#       label: 1
+#       environment: debug_valid
+#   test:
+#     - molecule_id: smoke_helium
+#       smiles: "[He]"
+#       label: 0
+#       environment: debug_test
 
 # Future model/training options will eventually live in this same config, but
 # are not read by the current preprocessing code yet.
