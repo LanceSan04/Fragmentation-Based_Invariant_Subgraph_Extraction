@@ -60,7 +60,7 @@ def main(args):
     if train_loader is None:
         raise ValueError(f"No training data found in {config.processed_dir}")
 
-    keys_to_remove = ["smiles", "molecule_id"]
+    keys_to_remove = ["fragment_to_atoms", "smiles", "molecule_id"]
     
     for loader in [train_loader, val_loader, test_loader]:
         if loader is not None and hasattr(loader, 'dataset'):

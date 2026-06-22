@@ -8,52 +8,15 @@
 python src/data/preprocess.py --config configs/experiment.yaml
 ```
 
-### Step 2: Validate Pipeline (Optional but Recommended)
+### Step 2: Train Model
 ```bash
-python test_sugar_pipeline.py --data_path data/processed/train.pt --num_samples 2
-```
-
-Expected output:
-```
-================================================================================
-SuGAR PIPELINE TEST
-================================================================================
-
-1. Loading processed molecular data...
-   Loaded 2 molecules
-
-2. Batching molecules...
-   Batch properties:
-     - Atoms: torch.Size([...])
-     - Fragments: torch.Size([...])
-     - Labels: torch.Size([...])
-
-3. Building fragment-level graphs...
-...
-
-6. Inspecting invariant subgraph extraction...
-   Fragment edges selected: X / Y (Z%)
-
-7. Reconstructed atom subgraphs...
-   Molecule 0:
-     - Atoms: torch.Size([...])
-     - Edges: torch.Size([...])
-
-================================================================================
-TEST COMPLETED SUCCESSFULLY
-================================================================================
-```
-
-### Step 3: Train Model
-```bash
-python train_sugar.py \
+python -m train_sugar \
   --processed_dir data/processed \
   --batch_size 32 \
   --gnn_layers 3 \
   --hidden_dim 128 \
   --edge_ratio 0.5 \
   --epochs 100 \
-  --device cuda
 ```
 
 The script will:

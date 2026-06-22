@@ -2,9 +2,7 @@
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.optim import Adam
-from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 
 
@@ -38,9 +36,12 @@ class SuGARTrainer:
             
         Returns:
             avg_loss: Average training loss for the epoch
+            accuracy: Training classification accuracy for the epoch
         """
         self.model.train()
         total_loss = 0
+        correct = 0
+        total = 0
         num_batches = 0
 
         pbar = tqdm(train_loader, desc="Training")
@@ -67,10 +68,20 @@ class SuGARTrainer:
 
             total_loss += loss.item()
             num_batches += 1
-            pbar.set_postfix({"loss": loss.item()})
+            
+            # Compute running accuracy
+            pred_labels = predictions.argmax(dim=-1)
+            correct += (pred_labels == labels).sum().item()
+            total += labels.size(0)
+            
+            # Update progress bar with both loss and live accuracy
+            current_acc = correct / total if total > 0 else 0.0
+            pbar.set_postfix({"loss": f"{loss.item():.4f}", "acc": f"{current_acc:.4f}"})
 
         avg_loss = total_loss / num_batches
-        return avg_loss
+        accuracy = correct / total if total > 0 else 0.0
+        
+        return avg_loss, accuracy
 
     @torch.no_grad()
     def evaluate(self, eval_loader):
@@ -126,16 +137,17 @@ class SuGARTrainer:
             patience: Early stopping patience
             
         Returns:
-            dict: Training history
+            dict: Training history containing train_loss, train_acc, val_loss, val_acc
         """
-        history = {"train_loss": [], "val_loss": [], "val_acc": []}
+        history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": []}
         best_val_loss = float("inf")
         patience_counter = 0
 
         for epoch in range(num_epochs):
             # Train
-            train_loss = self.train_epoch(train_loader)
+            train_loss, train_acc = self.train_epoch(train_loader)
             history["train_loss"].append(train_loss)
+            history["train_acc"].append(train_acc)
 
             # Validate
             if val_loader is not None:
@@ -146,6 +158,7 @@ class SuGARTrainer:
                 print(
                     f"Epoch {epoch + 1}/{num_epochs} | "
                     f"Train Loss: {train_loss:.4f} | "
+                    f"Train Acc: {train_acc:.4f} | "
                     f"Val Loss: {val_loss:.4f} | "
                     f"Val Acc: {val_acc:.4f}"
                 )
@@ -161,6 +174,10 @@ class SuGARTrainer:
                     print(f"Early stopping at epoch {epoch + 1}")
                     break
             else:
-                print(f"Epoch {epoch + 1}/{num_epochs} | Train Loss: {train_loss:.4f}")
+                print(
+                    f"Epoch {epoch + 1}/{num_epochs} | "
+                    f"Train Loss: {train_loss:.4f} | "
+                    f"Train Acc: {train_acc:.4f}"
+                )
 
         return history
