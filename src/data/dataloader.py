@@ -12,24 +12,25 @@ import random
 import torch
 from torch_geometric.loader import DataLoader
 
+from src.data.config_hash import preprocessing_config_hash
+
 
 class ProcessedMoleculeDataset:
     """Sequence wrapper for one processed molecular split.
 
     ``__getitem__``, ``__len__``, and ``__repr__`` retain the behavior of
-    Group Graph's ``SmilesDataset``. The expected project payload is a mapping
-    containing a list of molecule records under ``data_type``.
+    Group Graph's ``SmilesDataset``. The expected project payload contains
+    PyG-ready molecule records under ``molecule_data``.
     """
 
-    def __init__(self, datas, data_type="molecule_data"):
+    def __init__(self, datas):
         self.datas = datas
-        self.data_type = data_type
 
     def __getitem__(self, id):
-        return self.datas[self.data_type][id]
+        return self.datas["molecule_data"][id]
 
     def __len__(self):
-        return len(self.datas[self.data_type])
+        return len(self.datas["molecule_data"])
 
     def __repr__(self):  # pragma: no cover
         return "{}({})".format(self.__class__.__name__, len(self))
@@ -42,7 +43,7 @@ def load_processed_split(path, expected_metadata=None):
     if osp.getsize(path) <= 1:
         raise ValueError(f"Processed split is a placeholder, not valid data: {path}")
 
-    payload = torch.load(path, map_location="cpu")
+    payload = torch.load(path, map_location="cpu", weights_only=False)
     if not isinstance(payload, dict):
         raise ValueError("Processed split must contain a dictionary payload")
     if "metadata" not in payload or "molecule_data" not in payload:
@@ -61,10 +62,10 @@ def load_processed_split(path, expected_metadata=None):
     return payload
 
 
-def build_dataset(path, expected_metadata=None, data_type="molecule_data"):
+def build_dataset(path, expected_metadata=None):
     """Create a ProcessedMoleculeDataset from one validated split file."""
     payload = load_processed_split(path, expected_metadata=expected_metadata)
-    return ProcessedMoleculeDataset(payload, data_type=data_type)
+    return ProcessedMoleculeDataset(payload)
 
 
 def build_dataloader(
@@ -184,10 +185,12 @@ def _expected_metadata(config):
         "pooling",
         "atom_feature_dim",
         "bond_feature_dim",
+        "fragment_feature_dim",
     ]
     metadata = {}
     for key in keys:
         value = _config_get(config, key, None)
         if value is not None:
             metadata[key] = value
+    metadata["config_hash"] = preprocessing_config_hash(config)
     return metadata

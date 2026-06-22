@@ -7,10 +7,8 @@ import torch
 from rdkit import Chem
 
 from src.data.atom_graph import mol_to_atom_graph
-from src.fragmentation.group_graph import (
-    GroupGraphFragmenter,
-    build_fragment_edge_features,
-)
+from src.fragmentation import build_fragmenter
+from src.fragmentation.group_graph import FRAGMENT_EDGE_FEATURE_DIM, build_fragment_edge_features
 from src.models.fragment_pooler import FragmentPooler
 
 
@@ -33,6 +31,8 @@ class MoleculeExample:
     fragment_edge_to_bond: Any = None
     fragment_edge_to_bond_index: Any = None
     fragment_edge_to_attachment_atoms: Any = None
+    fragment_types: Optional[Any] = None
+    fragment_smiles: Optional[Any] = None
     y: Any = None
     environment_or_group: Optional[Any] = None
     smiles: Optional[str] = None
@@ -51,6 +51,7 @@ class MoleculeExample:
             "directed_edge_to_bond",
             "fragment_x_static",
             "fragment_edge_index",
+            "fragment_edge_attr",
             "atom_to_fragment",
             "fragment_to_atoms",
             "fragment_to_atom_index",
@@ -67,6 +68,10 @@ class MoleculeExample:
         num_fragments = self.fragment_x_static.size(0)
         num_fragment_edges = self.fragment_edge_index.size(1)
 
+        if self.fragment_types is not None and len(self.fragment_types) != num_fragments:
+            raise ValueError("fragment_types must contain one value per fragment")
+        if self.fragment_smiles is not None and len(self.fragment_smiles) != num_fragments:
+            raise ValueError("fragment_smiles must contain one value per fragment")
         if self.atom_to_fragment.shape != (num_atoms,):
             raise ValueError("atom_to_fragment must contain one value per atom")
         if self.fragment_edge_to_bond.shape != (num_fragment_edges,):
@@ -75,6 +80,11 @@ class MoleculeExample:
             raise ValueError("fragment_edge_to_bond_index must contain one value per fragment edge")
         if self.fragment_edge_to_attachment_atoms.shape != (2, num_fragment_edges):
             raise ValueError("fragment_edge_to_attachment_atoms must have shape [2, num_edges]")
+        if self.fragment_edge_attr.shape != (num_fragment_edges, FRAGMENT_EDGE_FEATURE_DIM):
+            raise ValueError(
+                "fragment_edge_attr must have shape "
+                f"({num_fragment_edges}, {FRAGMENT_EDGE_FEATURE_DIM})"
+            )
         if self.fragment_to_atom_index.dim() != 2 or self.fragment_to_atom_index.size(0) != 2:
             raise ValueError("fragment_to_atom_index must have shape [2, num_memberships]")
 
@@ -111,6 +121,8 @@ def build_molecule_example(
     label=None,
     environment_or_group=None,
     molecule_id=None,
+    fragmenter=None,
+    pooling="mean_atom_and_internal_bond",
 ):
     """Construct a MoleculeExample from raw molecular inputs."""
     mol = Chem.MolFromSmiles(smiles)
@@ -118,10 +130,11 @@ def build_molecule_example(
         raise ValueError(f"RDKit could not parse SMILES: {smiles!r}")
 
     atom_graph = mol_to_atom_graph(mol)
-    fragmentation = GroupGraphFragmenter().fragment(mol)
+    fragmenter = fragmenter or build_fragmenter("group_graph")
+    fragmentation = fragmenter.fragment(mol)
     fragment_edge_attr = build_fragment_edge_features(mol, fragmentation)
 
-    pooler = FragmentPooler()
+    pooler = FragmentPooler(pooling=pooling)
     fragment_x_static = pooler(
         atom_graph.atom_x,
         atom_graph.bond_index,
@@ -155,6 +168,8 @@ def build_molecule_example(
         fragment_edge_to_bond=fragmentation.fragment_edge_to_bond,
         fragment_edge_to_bond_index=fragmentation.fragment_edge_to_bond_index,
         fragment_edge_to_attachment_atoms=fragmentation.fragment_edge_to_attachment_atoms,
+        fragment_types=fragmentation.fragment_types,
+        fragment_smiles=fragmentation.fragment_smiles,
         y=y,
         environment_or_group=environment_or_group,
         smiles=smiles,
