@@ -124,6 +124,40 @@ seed: 7
 follow_batch:
   - fragment_x_static
 
+# SuGAr model settings.
+# These are used by train_sugar.py. The config file provides defaults; explicit
+# CLI values override them for a single run.
+num_classes: 2
+gnn_layers: 3
+hidden_dim: 128
+edge_ratio: 0.5
+num_views: 1
+dropout: 0.1
+
+# Training-time random fragment-edge sampler.
+# 1.0 keeps the full fragment graph. Values below 1.0 enable SuGAr-style
+# random fragment-edge dropping during training only.
+fragment_sample_ratio: 1.0
+sampler_seed: 7
+
+# Optimizer and training loop settings.
+learning_rate: 0.001
+weight_decay: 0.0
+epochs: 100
+patience: 20
+device: cuda
+save_model:
+
+# Auxiliary loss settings.
+# Current trainer defaults are active, but expose them here so experiments are
+# explicit and easy to override. For early debugging, set these to 0.0 one at a
+# time. IRM is optional and should use real environments before OOD claims.
+lambda_contrast: 1.0
+lambda_diversity: 1.0
+lambda_irm: 1.0
+contrast_temperature: 0.5
+contrast_sampling: mul
+
 # Smoke-mode inline records grouped by split.
 # For smoke mode, comment out raw_path above, set dataset/processed_dir back to
 # smoke paths, and uncomment this block.
@@ -149,17 +183,7 @@ follow_batch:
 #       label: 0
 #       environment: debug_test
 
-# Future model/training options will eventually live in this same config, but
-# are not read by the current preprocessing code yet.
-#
-# model:
-#   fragment_encoder: gin
-#   invariant_atom_classifier: gin
-# selection:
-#   method: top_ratio
-#   ratio: 0.5
-# sugar:
-#   num_base_models: 3
-#   fragment_sample_ratio: 0.95
-#   sampler_seed: 7
-#   aggregation: mean
+# Future full-SuGAr options:
+# aggregation: mean
+# weight_averaging: false
+# greedy_model_selection: false
