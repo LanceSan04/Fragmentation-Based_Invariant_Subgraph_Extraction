@@ -96,6 +96,8 @@ def main(args):
         dropout=args.dropout,
         fragment_edge_dim=fragment_edge_dim,
         atom_edge_dim=atom_edge_dim,
+        fragment_sample_ratio=args.fragment_sample_ratio,
+        sampler_seed=args.sampler_seed,
     )
 
     # Build trainer
@@ -145,6 +147,18 @@ if __name__ == "__main__":
     parser.add_argument("--gnn_layers", type=int, default=3, help="Number of GNN layers")
     parser.add_argument("--hidden_dim", type=int, default=128, help="Hidden dimension")
     parser.add_argument("--edge_ratio", type=float, default=0.5, help="Ratio of edges to keep in invariant subgraph")
+    parser.add_argument(
+        "--fragment_sample_ratio",
+        type=float,
+        default=1.0,
+        help="Training-time SuGAr sampler ratio for eligible fragment edges",
+    )
+    parser.add_argument(
+        "--sampler_seed",
+        type=int,
+        default=None,
+        help="Optional seed for reproducible fragment-edge sampling views",
+    )
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate")
 
     # Training arguments

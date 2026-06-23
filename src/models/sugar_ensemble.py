@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from src.models.fragment_graph_ciga import FragmentMasker, SimpleGNN
 from src.models.fragment_graph import build_fragment_graph_batch
+from src.models.fragment_edge_sampler import FragmentEdgeSampler
 from src.models.atom_reconstructor import reconstruct_batch
 from src.data.atom_graph import ATOM_FDIM, BOND_FDIM
 
@@ -68,11 +69,20 @@ class SuGAREnsemble(nn.Module):
         dropout=0.0,
         fragment_edge_dim=None,
         atom_edge_dim=BOND_FDIM,
+        fragment_sample_ratio=1.0,
+        sampler_seed=None,
     ):
         super().__init__()
         if fragment_feature_dim is None:
             raise ValueError("fragment_feature_dim must be provided")
         self.num_views = num_views
+        self.fragment_edge_samplers = nn.ModuleList([
+            FragmentEdgeSampler(
+                keep_ratio=fragment_sample_ratio,
+                seed=None if sampler_seed is None else int(sampler_seed) + view_idx,
+            )
+            for view_idx in range(num_views)
+        ])
 
         self.fragment_maskers = nn.ModuleList([
             FragmentMasker(
@@ -119,10 +129,27 @@ class SuGAREnsemble(nn.Module):
         fragment_batch = build_fragment_graph_batch(batch_data).to(device)
 
         all_logits = []
-        intermediates = {"fragment_masks": [], "fragment_scores": [], "atom_graphs": []}
+        intermediates = {
+            "fragment_masks": [],
+            "fragment_scores": [],
+            "eligible_fragment_masks": [],
+            "sampled_fragment_edge_ids": [],
+            "atom_graphs": [],
+        }
 
         for view_idx in range(self.num_views):
-            edge_scores, bool_mask = self.fragment_maskers[view_idx](fragment_batch)
+            sampled_fragment_batch, eligible_mask = self.fragment_edge_samplers[view_idx](
+                fragment_batch
+            )
+            sampled_edge_scores, sampled_bool_mask = self.fragment_maskers[view_idx](
+                sampled_fragment_batch
+            )
+            bool_mask, edge_scores = self._restore_full_edge_outputs(
+                fragment_batch.edge_index.size(1),
+                sampled_fragment_batch.full_fragment_edge_id,
+                sampled_bool_mask,
+                sampled_edge_scores,
+            )
             atom_batch = reconstruct_batch(
                 batch_data,
                 bool_mask,
@@ -134,6 +161,10 @@ class SuGAREnsemble(nn.Module):
             if return_intermediates:
                 intermediates["fragment_masks"].append(bool_mask)
                 intermediates["fragment_scores"].append(edge_scores)
+                intermediates["eligible_fragment_masks"].append(eligible_mask)
+                intermediates["sampled_fragment_edge_ids"].append(
+                    sampled_fragment_batch.full_fragment_edge_id
+                )
                 intermediates["atom_graphs"].append(atom_batch)
 
         predictions = self.aggregator(torch.cat(all_logits, dim=-1))
@@ -141,6 +172,25 @@ class SuGAREnsemble(nn.Module):
         if return_intermediates:
             return predictions, intermediates
         return predictions
+
+    @staticmethod
+    def _restore_full_edge_outputs(
+        num_full_edges,
+        sampled_full_edge_ids,
+        sampled_bool_mask,
+        sampled_edge_scores,
+    ):
+        """Map sampled-graph scores/masks back to full fragment-edge order."""
+        device = sampled_edge_scores.device
+        full_mask = torch.zeros(num_full_edges, dtype=torch.bool, device=device)
+        full_scores = torch.zeros(num_full_edges, dtype=sampled_edge_scores.dtype, device=device)
+        if sampled_full_edge_ids.numel() == 0:
+            return full_mask, full_scores
+
+        sampled_full_edge_ids = sampled_full_edge_ids.to(device)
+        full_mask[sampled_full_edge_ids] = sampled_bool_mask
+        full_scores[sampled_full_edge_ids] = sampled_edge_scores
+        return full_mask, full_scores
 
     def get_invariant_subgraph(self, batch_data, view_idx=0):
         """Return the reconstructed atom subgraph batch for the given view.
@@ -154,7 +204,16 @@ class SuGAREnsemble(nn.Module):
         """
         device = batch_data.x.device
         fragment_batch = build_fragment_graph_batch(batch_data).to(device)
-        edge_scores, bool_mask = self.fragment_maskers[view_idx](fragment_batch)
+        sampled_fragment_batch, _ = self.fragment_edge_samplers[view_idx](fragment_batch)
+        sampled_edge_scores, sampled_bool_mask = self.fragment_maskers[view_idx](
+            sampled_fragment_batch
+        )
+        bool_mask, edge_scores = self._restore_full_edge_outputs(
+            fragment_batch.edge_index.size(1),
+            sampled_fragment_batch.full_fragment_edge_id,
+            sampled_bool_mask,
+            sampled_edge_scores,
+        )
         return reconstruct_batch(
             batch_data,
             bool_mask,
