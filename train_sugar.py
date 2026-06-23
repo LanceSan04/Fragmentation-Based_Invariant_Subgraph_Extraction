@@ -2,7 +2,6 @@
 """Main training script for SuGAR ensemble on molecular property prediction."""
 
 import torch
-import torch.nn as nn
 import argparse
 import yaml
 from pathlib import Path
@@ -17,11 +16,7 @@ from src.training.sugar_trainer import SuGARTrainer
 class Config:
     """Configuration object."""
 
-    def __init__(self, args=None, config_dict=None):
-        if args:
-            self.processed_dir = args.processed_dir
-            self.batch_size = args.batch_size
-            self.num_workers = args.num_workers
+    def __init__(self, config_dict=None):
         if config_dict:
             for key, val in config_dict.items():
                 setattr(self, key, val)
@@ -33,7 +28,24 @@ class Config:
 def load_config(config_path):
     """Load configuration from YAML file."""
     with open(config_path, "r") as f:
-        return yaml.safe_load(f)
+        return yaml.safe_load(f) or {}
+
+
+def merge_config_and_cli(config_dict, args):
+    """Use YAML as defaults and explicit CLI values as overrides."""
+    merged = dict(config_dict or {})
+    for key, value in vars(args).items():
+        if key == "config":
+            continue
+        if value is not None:
+            merged[key] = value
+    return merged
+
+
+def build_config(args):
+    """Build the effective training config from YAML defaults plus CLI overrides."""
+    config_dict = load_config(args.config) if args.config else {}
+    return Config(merge_config_and_cli(config_dict, args))
 
 
 def main(args):
@@ -42,12 +54,9 @@ def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() and args.device == "cuda" else "cpu")
     print(f"Using device: {device}")
 
-    # Load configuration
-    if args.config:
-        config_dict = load_config(args.config)
-        config = Config(config_dict=config_dict)
-    else:
-        config = Config(args=args)
+    # Load configuration. YAML values provide defaults; explicit CLI values
+    # override those defaults.
+    config = build_config(args)
 
     # Build dataloaders
     print(f"Loading data from {config.processed_dir}...")
@@ -88,24 +97,29 @@ def main(args):
     model = SuGAREnsemble(
         atom_feature_dim=atom_feat_dim,
         fragment_feature_dim=fragment_feat_dim,
-        num_classes=args.num_classes,
-        num_gnn_layers=args.gnn_layers,
-        gnn_hidden_dim=args.hidden_dim,
-        edge_ratio=args.edge_ratio,
-        num_views=1,  # Single view for now
-        dropout=args.dropout,
+        num_classes=config.num_classes,
+        num_gnn_layers=config.gnn_layers,
+        gnn_hidden_dim=config.hidden_dim,
+        edge_ratio=config.edge_ratio,
+        num_views=config.num_views,
+        dropout=config.dropout,
         fragment_edge_dim=fragment_edge_dim,
         atom_edge_dim=atom_edge_dim,
-        fragment_sample_ratio=args.fragment_sample_ratio,
-        sampler_seed=args.sampler_seed,
+        fragment_sample_ratio=config.fragment_sample_ratio,
+        sampler_seed=config.sampler_seed,
     )
 
     # Build trainer
     trainer = SuGARTrainer(
         model,
         device=device,
-        learning_rate=args.learning_rate,
-        weight_decay=args.weight_decay,
+        learning_rate=config.learning_rate,
+        weight_decay=config.weight_decay,
+        lambda_contrast=config.lambda_contrast,
+        lambda_diversity=config.lambda_diversity,
+        lambda_irm=config.lambda_irm,
+        contrast_temperature=config.contrast_temperature,
+        contrast_sampling=config.contrast_sampling,
     )
 
     # Train
@@ -113,8 +127,8 @@ def main(args):
     history = trainer.train(
         train_loader,
         val_loader=val_loader,
-        num_epochs=args.epochs,
-        patience=args.patience,
+        num_epochs=config.epochs,
+        patience=config.patience,
     )
 
     # Evaluate on test set
@@ -124,8 +138,8 @@ def main(args):
         print(f"Test Loss: {test_loss:.4f} | Test Accuracy: {test_acc:.4f}")
 
     # Save model
-    if args.save_model:
-        model_path = Path(args.save_model)
+    if config.save_model:
+        model_path = Path(config.save_model)
         model_path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(model.state_dict(), model_path)
         print(f"Model saved to {model_path}")
@@ -137,20 +151,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train SuGAR ensemble for molecular property prediction")
 
     # Data arguments
-    parser.add_argument("--processed_dir", type=str, default="data/processed", help="Directory with processed data")
+    parser.add_argument("--processed_dir", type=str, default=None, help="Directory with processed data")
     parser.add_argument("--config", type=str, default=None, help="Path to YAML config file")
-    parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
-    parser.add_argument("--num_workers", type=int, default=0, help="Number of data loading workers")
+    parser.add_argument("--batch_size", type=int, default=None, help="Batch size")
+    parser.add_argument("--num_workers", type=int, default=None, help="Number of data loading workers")
 
     # Model arguments
-    parser.add_argument("--num_classes", type=int, default=2, help="Number of output classes")
-    parser.add_argument("--gnn_layers", type=int, default=3, help="Number of GNN layers")
-    parser.add_argument("--hidden_dim", type=int, default=128, help="Hidden dimension")
-    parser.add_argument("--edge_ratio", type=float, default=0.5, help="Ratio of edges to keep in invariant subgraph")
+    parser.add_argument("--num_classes", type=int, default=None, help="Number of output classes")
+    parser.add_argument("--gnn_layers", type=int, default=None, help="Number of GNN layers")
+    parser.add_argument("--hidden_dim", type=int, default=None, help="Hidden dimension")
+    parser.add_argument("--edge_ratio", type=float, default=None, help="Ratio of edges to keep in invariant subgraph")
+    parser.add_argument("--num_views", type=int, default=None, help="Number of SuGAr views/base models")
     parser.add_argument(
         "--fragment_sample_ratio",
         type=float,
-        default=1.0,
+        default=None,
         help="Training-time SuGAr sampler ratio for eligible fragment edges",
     )
     parser.add_argument(
@@ -159,14 +174,25 @@ if __name__ == "__main__":
         default=None,
         help="Optional seed for reproducible fragment-edge sampling views",
     )
-    parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate")
+    parser.add_argument("--dropout", type=float, default=None, help="Dropout rate")
 
     # Training arguments
-    parser.add_argument("--learning_rate", type=float, default=0.001, help="Learning rate")
-    parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay")
-    parser.add_argument("--epochs", type=int, default=100, help="Number of epochs")
-    parser.add_argument("--patience", type=int, default=20, help="Early stopping patience")
-    parser.add_argument("--device", type=str, default="cuda", help="Device (cuda/cpu)")
+    parser.add_argument("--learning_rate", type=float, default=None, help="Learning rate")
+    parser.add_argument("--weight_decay", type=float, default=None, help="Weight decay")
+    parser.add_argument("--epochs", type=int, default=None, help="Number of epochs")
+    parser.add_argument("--patience", type=int, default=None, help="Early stopping patience")
+    parser.add_argument("--lambda_contrast", type=float, default=None, help="Supervised contrastive loss weight")
+    parser.add_argument("--lambda_diversity", type=float, default=None, help="Pairwise diversity loss weight")
+    parser.add_argument("--lambda_irm", type=float, default=None, help="IRM penalty weight")
+    parser.add_argument("--contrast_temperature", type=float, default=None, help="Supervised contrastive temperature")
+    parser.add_argument(
+        "--contrast_sampling",
+        type=str,
+        default=None,
+        choices=["mul", "var", "cnc"],
+        help="Supervised contrastive sampling mode",
+    )
+    parser.add_argument("--device", type=str, default=None, help="Device (cuda/cpu)")
     parser.add_argument("--save_model", type=str, default=None, help="Path to save trained model")
 
     args = parser.parse_args()
