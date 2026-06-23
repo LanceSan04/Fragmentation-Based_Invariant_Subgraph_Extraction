@@ -24,7 +24,7 @@ def analyze_invariant_subgraph(model, batch_data, molecule_idx=0):
         dict: Analysis results
     """
     with torch.no_grad():
-        subgraph = model.get_invariant_subgraph(batch_data, view_idx=0)
+        subgraph = model.get_invariant_subgraph(batch_data)
         subgraph = subgraph[molecule_idx]
         
         # Get full molecule for comparison

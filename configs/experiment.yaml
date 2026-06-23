@@ -113,7 +113,7 @@ debug_molecule_details: false
 
 # PyG DataLoader settings used by --validate-loaders.
 # train loaders shuffle automatically; valid/test loaders do not.
-batch_size: 2
+batch_size: 16
 num_workers: 0
 pin_memory: false
 drop_last: false

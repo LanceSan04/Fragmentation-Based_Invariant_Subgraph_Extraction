@@ -2,11 +2,13 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from src.models.fragment_graph_ciga import FragmentMasker, SimpleGNN
 from src.models.fragment_graph import build_fragment_graph_batch
 from src.models.fragment_edge_sampler import FragmentEdgeSampler
 from src.models.atom_reconstructor import reconstruct_batch
 from src.data.atom_graph import ATOM_FDIM, BOND_FDIM
+
 
 class AtomClassifier(nn.Module):
     """GNN classifier for atom-level invariant subgraphs.
@@ -55,11 +57,16 @@ class AtomClassifier(nn.Module):
 class SuGAREnsemble(nn.Module):
     """Multi-view fragment learning with invariant subgraph extraction.
 
-    Per-view pipeline:
-      1. FragmentMasker   — fragment graph → boolean edge mask
-      2. reconstruct_batch — deterministic atom-level subgraph reconstruction
-      3. AtomClassifier   — atom subgraph → class logits
-    Logits from all views are concatenated and passed through an aggregator MLP.
+    Stage 2 — aggregate edge weights from all n maskers (mean or max) and apply
+    a single top-k selection to obtain one shared invariant subgraph G_c^bm:
+
+        G_c^bm = TopK( (1/n) * sum_i E^(i) )        [mean mode]
+        G_c^bm = TopK( max_i E^(i) )                 [max mode]
+
+    Stage 3 — all n classifiers predict on G_c^bm; their softmax probabilities
+    are averaged (soft voting) to produce the final class distribution:
+
+        FinalDecision = argmax_k (1/n) * sum_i P_i(Y=k)
     """
 
     def __init__(
@@ -72,14 +79,23 @@ class SuGAREnsemble(nn.Module):
         edge_ratio=0.5,
         num_views=1,
         dropout=0.0,
+        aggregation_mode="mean",
         fragment_edge_dim=None,
         atom_edge_dim=BOND_FDIM,
         fragment_sample_ratio=1.0,
         sampler_seed=None,
     ):
+        """
+        Args:
+            aggregation_mode: Stage 2 weight aggregation — 'mean' averages edge
+                weights across all maskers; 'max' takes the per-edge maximum.
+        """
         super().__init__()
         if fragment_feature_dim is None:
             raise ValueError("fragment_feature_dim must be provided")
+        if aggregation_mode not in ("mean", "max"):
+            raise ValueError("aggregation_mode must be 'mean' or 'max'")
+
         self.num_views = num_views
         self.fragment_edge_samplers = nn.ModuleList([
             FragmentEdgeSampler(
@@ -88,6 +104,7 @@ class SuGAREnsemble(nn.Module):
             )
             for view_idx in range(num_views)
         ])
+        self.aggregation_mode = aggregation_mode
 
         self.fragment_maskers = nn.ModuleList([
             FragmentMasker(
@@ -113,29 +130,34 @@ class SuGAREnsemble(nn.Module):
             for _ in range(num_views)
         ])
 
-        self.aggregator = nn.Sequential(
-            nn.Linear(num_views * num_classes, 2 * num_classes),
-            nn.ReLU(),
-            nn.Linear(2 * num_classes, num_classes),
-        )
+    def _aggregate_weights(self, all_soft_weights):
+        """Stage 2: combine per-masker edge weight vectors into one."""
+        stacked = torch.stack(all_soft_weights, dim=0)  # [n, num_edges]
+        if self.aggregation_mode == "mean":
+            return stacked.mean(dim=0)
+        return stacked.max(dim=0).values
 
     def forward(self, batch_data, return_intermediates=False):
         """
+        Stage 2: Aggregate masker edge weights (mean or max): top-k shared subgraph.
+        Stage 3: All classifiers predict on the shared subgraph; soft vote (avg softmax).
+
         Args:
             batch_data: Batched MoleculeData objects
-            return_intermediates: If True, also return per-view fragment masks
-                                  and reconstructed atom graphs
+            return_intermediates: If True, also return per-masker scores, shared atom
+                                  graph, per-classifier embeddings and logits.
 
         Returns:
-            predictions: [batch_size, num_classes]
-            intermediates: (optional) dict with 'fragment_masks' and 'atom_graphs'
+            predictions: [batch_size, num_classes] — log-probabilities (use with F.nll_loss)
+            intermediates: (optional) dict with 'fragment_scores', 'bool_mask',
+                           'atom_graphs', 'embeddings', 'per_view_logits'
         """
         device = batch_data.x.device
         fragment_batch = build_fragment_graph_batch(batch_data).to(device)
 
-        all_logits = []
+        all_soft_weights = []
         intermediates = {
-            "fragment_masks": [],
+            "bool_mask": None,
             "fragment_scores": [],
             "eligible_fragment_masks": [],
             "sampled_fragment_edge_ids": [],
@@ -151,33 +173,50 @@ class SuGAREnsemble(nn.Module):
             sampled_edge_scores, sampled_bool_mask = self.fragment_maskers[view_idx](
                 sampled_fragment_batch
             )
-            bool_mask, edge_scores = self._restore_full_edge_outputs(
+            _, edge_scores = self._restore_full_edge_outputs(
                 fragment_batch.edge_index.size(1),
                 sampled_fragment_batch.full_fragment_edge_id,
                 sampled_bool_mask,
                 sampled_edge_scores,
             )
-            atom_batch = reconstruct_batch(
-                batch_data,
-                bool_mask,
-                selected_fragment_edge_weight=edge_scores,
-            ).to(device)
+            all_soft_weights.append(edge_scores)
+
             if return_intermediates:
-                logits, h_graph = self.atom_classifiers[view_idx](atom_batch, return_embeddings=True)
-                intermediates["fragment_masks"].append(bool_mask)
                 intermediates["fragment_scores"].append(edge_scores)
                 intermediates["eligible_fragment_masks"].append(eligible_mask)
-                intermediates["sampled_fragment_edge_ids"].append(
-                    sampled_fragment_batch.full_fragment_edge_id
-                )
+                intermediates["sampled_fragment_edge_ids"].append(sampled_fragment_batch.full_fragment_edge_id)
+
+        # Aggregate across maskers, then single top-k → one shared subgraph G_c^bm
+        agg_weights = self._aggregate_weights(all_soft_weights)
+        edge_batch = fragment_batch.batch[fragment_batch.edge_index[0]]
+        bool_mask = FragmentMasker._topk_mask(
+            agg_weights.detach(), edge_batch, self.fragment_maskers[0].ratio
+        )
+        atom_batch = reconstruct_batch(
+            batch_data, bool_mask, selected_fragment_edge_weight=agg_weights
+        ).to(device)
+
+        # Stage 3: each classifier predicts on the shared subgraph; soft vote
+        if return_intermediates:
+            intermediates["bool_mask"] = bool_mask
+
+        all_probs = []
+        for view_idx in range(self.num_views):
+            classifier = self.atom_classifiers[view_idx]
+
+            if return_intermediates:
+                logits, h_graph = classifier(atom_batch, return_embeddings=True)
                 intermediates["atom_graphs"].append(atom_batch)
                 intermediates["embeddings"].append(h_graph)
                 intermediates["per_view_logits"].append(logits)
             else:
-                logits = self.atom_classifiers[view_idx](atom_batch)
-            all_logits.append(logits)
+                logits = classifier(atom_batch)
+                
+            all_probs.append(F.softmax(logits, dim=-1))
 
-        predictions = self.aggregator(torch.cat(all_logits, dim=-1))
+        avg_probs = torch.stack(all_probs, dim=0).mean(dim=0)  # [batch, num_classes]
+        # log-probs: argmax preserved (log monotone), compatible with F.nll_loss
+        predictions = torch.log(avg_probs.clamp(min=1e-8))
 
         if return_intermediates:
             return predictions, intermediates

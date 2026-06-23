@@ -1,14 +1,14 @@
 import torch.nn.functional as F
 
 
-def prediction_loss(logits, labels):
-    """Cross-entropy between aggregated logits and integer class labels.
+def prediction_loss(log_probs, labels):
+    """NLL loss between soft-vote log-probabilities and integer class labels.
 
     Args:
-        logits: [N, num_classes] — output of SuGAREnsemble aggregator
+        log_probs: [N, num_classes] — log-probabilities from SuGAREnsemble.forward
         labels: [N] integer class indices
 
     Returns:
-        Scalar cross-entropy loss.
+        Scalar NLL loss.
     """
-    return F.cross_entropy(logits, labels.long())
+    return F.nll_loss(log_probs, labels.long())
