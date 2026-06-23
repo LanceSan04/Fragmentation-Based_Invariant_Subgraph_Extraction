@@ -149,12 +149,14 @@ device: cuda
 save_model:
 
 # Auxiliary loss settings.
-# Current trainer defaults are active, but expose them here so experiments are
-# explicit and easy to override. For early debugging, set these to 0.0 one at a
-# time. IRM is optional and should use real environments before OOD claims.
+# Contrastive and diversity losses are active by default for SuGAr-style
+# training. IRM is off by default because it only makes sense when a run has
+# meaningful environment partitions. It is only applied when lambda_irm > 0.0
+# and num_envs > 1.
 lambda_contrast: 1.0
 lambda_diversity: 1.0
-lambda_irm: 1.0
+lambda_irm: 0.0
+num_envs: 1
 contrast_temperature: 0.5
 contrast_sampling: mul
 

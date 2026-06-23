@@ -21,7 +21,8 @@ class SuGARTrainer:
         weight_decay=0.0,
         lambda_contrast=1.0,
         lambda_diversity=1.0,
-        lambda_irm=1.0,
+        lambda_irm=0.0,
+        num_envs=1,
         contrast_temperature=0.5,
         contrast_sampling="mul",
     ):
@@ -33,11 +34,12 @@ class SuGARTrainer:
             weight_decay: Weight decay for regularization
             lambda_contrast: Weight for supervised contrastive loss (0 disables it)
             lambda_diversity: Weight for pairwise diversity loss (0 disables it)
-            lambda_irm: Weight for IRM penalty (0 disables it). The default
-                is intentionally left as-is from the incoming loss branch, but
-                random environment assignments are a provisional SuGAr-style
-                fallback. Prefer real environment/scaffold/assay groups when
-                available.
+            lambda_irm: Weight for IRM penalty. IRM is disabled unless this is
+                greater than 0 and num_envs is greater than 1.
+            num_envs: Number of environment partitions available for IRM. The
+                current implementation still uses provisional random binary
+                assignments when IRM is enabled, so keep this at 1 unless a run
+                is deliberately testing the IRM path.
             contrast_temperature: Temperature for supervised contrastive loss
             contrast_sampling: Sampling mode for contrastive loss ('mul', 'var', 'cnc')
         """
@@ -47,8 +49,13 @@ class SuGARTrainer:
         self.lambda_contrast = lambda_contrast
         self.lambda_diversity = lambda_diversity
         self.lambda_irm = lambda_irm
+        self.num_envs = num_envs
         self.contrast_temperature = contrast_temperature
         self.contrast_sampling = contrast_sampling
+
+    def uses_irm(self):
+        """Return whether the IRM penalty should participate in training."""
+        return self.lambda_irm > 0 and self.num_envs > 1
 
     def train_epoch(self, train_loader):
         """Train for one epoch.
@@ -66,11 +73,12 @@ class SuGARTrainer:
         total = 0
         num_batches = 0
 
-        use_aux = self.lambda_contrast > 0 or self.lambda_diversity > 0 or self.lambda_irm > 0
+        use_irm = self.uses_irm()
+        use_aux = self.lambda_contrast > 0 or self.lambda_diversity > 0 or use_irm
 
         # Pre-generate random binary environment assignments for the full dataset,
         # mirroring SuGAr main.py. Sliced per-batch below.
-        if self.lambda_irm > 0:
+        if use_irm:
             dataset_size = len(train_loader.dataset)
             env_idx = (torch.sigmoid(torch.randn(dataset_size)) > 0.5).long()
         else:
@@ -128,7 +136,7 @@ class SuGARTrainer:
 
                 # IRM penalty applied to each view's invariant-subgraph logits,
                 # averaged across views (mirrors SuGAr: irm applied to causal_pred).
-                if self.lambda_irm > 0:
+                if use_irm:
                     batch_size = labels.size(0)
                     start = step * train_loader.batch_size
                     batch_env = env_idx[start: start + batch_size].to(self.device)

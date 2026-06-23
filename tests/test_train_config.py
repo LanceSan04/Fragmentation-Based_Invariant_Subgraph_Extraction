@@ -19,6 +19,7 @@ class TrainConfigTests(unittest.TestCase):
             "batch_size": 32,
             "hidden_dim": 128,
             "lambda_irm": 0.0,
+            "num_envs": 1,
         }
         args = argparse.Namespace(
             config="configs/experiment.yaml",
@@ -26,6 +27,7 @@ class TrainConfigTests(unittest.TestCase):
             batch_size=4,
             hidden_dim=None,
             lambda_irm=1.0,
+            num_envs=None,
         )
 
         merged = merge_config_and_cli(config, args)
@@ -34,6 +36,7 @@ class TrainConfigTests(unittest.TestCase):
         self.assertEqual(merged["batch_size"], 4)
         self.assertEqual(merged["hidden_dim"], 128)
         self.assertEqual(merged["lambda_irm"], 1.0)
+        self.assertEqual(merged["num_envs"], 1)
         self.assertNotIn("config", merged)
 
     def test_training_only_overrides_do_not_change_preprocessing_hash(self):
@@ -57,6 +60,7 @@ class TrainConfigTests(unittest.TestCase):
                 "lambda_contrast": 0.0,
                 "lambda_diversity": 0.2,
                 "lambda_irm": 0.0,
+                "num_envs": 1,
             }
         )
 
