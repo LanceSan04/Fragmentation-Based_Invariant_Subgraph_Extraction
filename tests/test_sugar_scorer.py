@@ -28,6 +28,7 @@ import unittest
 import torch
 import torch.nn.functional as F
 from torch_geometric.data import Batch
+from torch_geometric.loader import DataLoader
 
 from src.data.molecule_example import build_molecule_example
 from src.data.pyg_batch import molecule_example_to_data
@@ -35,6 +36,7 @@ from src.fragmentation import build_fragmenter
 from src.models.fragment_edge_sampler import FragmentEdgeSampler
 from src.models.fragment_graph import build_fragment_graph_batch
 from src.models.sugar_ensemble import SuGAREnsemble
+from src.training.sugar_trainer import SuGARTrainer
 
 
 class SuGArScorerTests(unittest.TestCase):
@@ -146,6 +148,51 @@ class SuGArScorerTests(unittest.TestCase):
 
         self.assertTrue(torch.all(eval_eligible_mask))
         self.assertTrue(torch.all(eval_selected_mask))
+
+    def test_trainer_runs_prediction_contrastive_and_diversity_losses(self):
+        torch.manual_seed(17)
+        data_list = [
+            self.build_data("CCOC(=O)C", 0),
+            self.build_data("CCN(CC)CC", 0),
+            self.build_data("CCCOC(=O)C", 1),
+            self.build_data("CCCN(CC)CC", 1),
+        ]
+        loader = DataLoader(
+            data_list,
+            batch_size=4,
+            shuffle=False,
+            follow_batch=["fragment_x_static"],
+        )
+        batch = next(iter(loader))
+
+        model = SuGAREnsemble(
+            atom_feature_dim=batch.x.size(1),
+            fragment_feature_dim=batch.fragment_x_static.size(1),
+            num_classes=2,
+            num_gnn_layers=2,
+            gnn_hidden_dim=32,
+            edge_ratio=1.0,
+            num_views=2,
+            dropout=0.0,
+            fragment_edge_dim=batch.fragment_edge_attr.size(1),
+            atom_edge_dim=batch.edge_attr.size(1),
+            fragment_sample_ratio=1.0,
+            sampler_seed=17,
+        )
+        trainer = SuGARTrainer(
+            model,
+            learning_rate=1e-3,
+            lambda_contrast=1.0,
+            lambda_diversity=1.0,
+            lambda_irm=0.0,
+            contrast_sampling="mul",
+        )
+
+        loss, accuracy = trainer.train_epoch(loader)
+
+        self.assertTrue(torch.isfinite(torch.tensor(loss)))
+        self.assertGreaterEqual(accuracy, 0.0)
+        self.assertLessEqual(accuracy, 1.0)
 
 
 if __name__ == "__main__":

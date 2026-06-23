@@ -33,7 +33,11 @@ class SuGARTrainer:
             weight_decay: Weight decay for regularization
             lambda_contrast: Weight for supervised contrastive loss (0 disables it)
             lambda_diversity: Weight for pairwise diversity loss (0 disables it)
-            lambda_irm: Weight for IRM penalty (0 disables it)
+            lambda_irm: Weight for IRM penalty (0 disables it). The default
+                is intentionally left as-is from the incoming loss branch, but
+                random environment assignments are a provisional SuGAr-style
+                fallback. Prefer real environment/scaffold/assay groups when
+                available.
             contrast_temperature: Temperature for supervised contrastive loss
             contrast_sampling: Sampling mode for contrastive loss ('mul', 'var', 'cnc')
         """
@@ -98,11 +102,22 @@ class SuGARTrainer:
                 if self.lambda_contrast > 0:
                     all_emb = torch.cat(intermediates["embeddings"], dim=0)   # [N*V, D]
                     all_labels = labels.repeat(self.model.num_views)           # [N*V]
+                    if self.contrast_sampling.lower() == "cnc":
+                        y_pred = torch.cat(
+                            [
+                                view_logits.detach().argmax(dim=-1)
+                                for view_logits in intermediates["per_view_logits"]
+                            ],
+                            dim=0,
+                        )
+                    else:
+                        y_pred = None
                     loss = loss + self.lambda_contrast * supervised_contrastive_loss(
                         all_emb,
                         all_labels,
                         temperature=self.contrast_temperature,
                         sampling=self.contrast_sampling,
+                        y_pred=y_pred,
                     )
 
                 # Pairwise diversity loss over aligned fragment-edge score vectors.

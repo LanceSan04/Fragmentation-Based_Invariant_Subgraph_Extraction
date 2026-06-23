@@ -50,10 +50,13 @@ def supervised_contrastive_loss(
         log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-12)
 
         is_valid = pos_mask.sum(1) != 0
+        if not is_valid.any():
+            return embeddings.new_tensor(0.0)
+
         mean_log_prob_pos = (pos_mask * log_prob).sum(1)[is_valid] / pos_mask.sum(1)[is_valid]
         loss = -mean_log_prob_pos.mean()
         if sampling.lower() == "var":
-            loss = loss + mean_log_prob_pos.var()
+            loss = loss + mean_log_prob_pos.var(unbiased=False)
         return loss
 
     elif sampling.lower() == "cnc":
@@ -75,11 +78,14 @@ def supervised_contrastive_loss(
         if hard_pos.sum() == 0:
             hard_pos = pos_mask
 
+        is_valid = hard_pos.sum(1) != 0
+        if not is_valid.any():
+            return embeddings.new_tensor(0.0)
+
         pos_exp = torch.exp(logits) * hard_pos
         neg_exp = torch.exp(logits) * hard_neg
         log_prob = logits - torch.log(pos_exp.sum(1, keepdim=True) + neg_exp.sum(1, keepdim=True) + 1e-12)
 
-        is_valid = hard_pos.sum(1) != 0
         mean_log_prob_pos = (hard_pos * log_prob).sum(1)[is_valid] / hard_pos.sum(1)[is_valid]
         return -mean_log_prob_pos.mean()
 
