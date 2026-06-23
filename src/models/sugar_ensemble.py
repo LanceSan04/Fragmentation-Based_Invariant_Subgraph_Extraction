@@ -159,6 +159,7 @@ class SuGAREnsemble(nn.Module):
         intermediates = {
             "bool_mask": None,
             "fragment_scores": [],
+            "fragment_masks": [],
             "eligible_fragment_masks": [],
             "sampled_fragment_edge_ids": [],
             "atom_graphs": [],
@@ -173,7 +174,7 @@ class SuGAREnsemble(nn.Module):
             sampled_edge_scores, sampled_bool_mask = self.fragment_maskers[view_idx](
                 sampled_fragment_batch
             )
-            _, edge_scores = self._restore_full_edge_outputs(
+            full_mask, edge_scores = self._restore_full_edge_outputs(
                 fragment_batch.edge_index.size(1),
                 sampled_fragment_batch.full_fragment_edge_id,
                 sampled_bool_mask,
@@ -183,6 +184,7 @@ class SuGAREnsemble(nn.Module):
 
             if return_intermediates:
                 intermediates["fragment_scores"].append(edge_scores)
+                intermediates["fragment_masks"].append(full_mask)
                 intermediates["eligible_fragment_masks"].append(eligible_mask)
                 intermediates["sampled_fragment_edge_ids"].append(sampled_fragment_batch.full_fragment_edge_id)
 
