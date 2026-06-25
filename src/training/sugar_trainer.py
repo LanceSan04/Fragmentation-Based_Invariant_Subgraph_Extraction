@@ -1,5 +1,7 @@
 """Training pipeline for SuGAr ensemble with multi-view fragment learning."""
 
+from copy import deepcopy
+
 import torch
 from torch.optim import Adam
 from tqdm import tqdm
@@ -225,6 +227,8 @@ class SuGARTrainer:
         """
         history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": []}
         best_val_loss = float("inf")
+        best_val_acc = -float("inf")
+        best_weights = None
         patience_counter = 0
 
         for epoch in range(num_epochs):
@@ -247,7 +251,12 @@ class SuGARTrainer:
                     f"Val Acc: {val_acc:.4f}"
                 )
 
-                # Early stopping
+                # Save best weights by validation accuracy (mirrors SuGAr main.py)
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
+                    best_weights = deepcopy(self.model.state_dict())
+
+                # Early stopping by validation loss
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
                     patience_counter = 0
@@ -263,5 +272,10 @@ class SuGARTrainer:
                     f"Train Loss: {train_loss:.4f} | "
                     f"Train Acc: {train_acc:.4f}"
                 )
+
+        # Restore the best-performing epoch weights
+        if best_weights is not None:
+            self.model.load_state_dict(best_weights)
+            print(f"Restored best model weights (val_acc = {best_val_acc:.4f})")
 
         return history
