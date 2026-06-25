@@ -137,7 +137,7 @@ class SuGAREnsemble(nn.Module):
             return stacked.mean(dim=0)
         return stacked.max(dim=0).values
 
-    def forward(self, batch_data, return_intermediates=False):
+    def forward(self, batch_data, return_intermediates=False, view_indices=None):
         """
         Stage 2: Aggregate masker edge weights (mean or max): top-k shared subgraph.
         Stage 3: All classifiers predict on the shared subgraph; soft vote (avg softmax).
@@ -146,12 +146,16 @@ class SuGAREnsemble(nn.Module):
             batch_data: Batched MoleculeData objects
             return_intermediates: If True, also return per-masker scores, shared atom
                                   graph, per-classifier embeddings and logits.
+            view_indices: Optional list of view indices to use. Defaults to all views.
+                          Used by greedy_view_selection to evaluate view subsets.
 
         Returns:
             predictions: [batch_size, num_classes] — log-probabilities (use with F.nll_loss)
             intermediates: (optional) dict with 'fragment_scores', 'bool_mask',
                            'atom_graphs', 'embeddings', 'per_view_logits'
         """
+        views = list(view_indices) if view_indices is not None else list(range(self.num_views))
+
         device = batch_data.x.device
         fragment_batch = build_fragment_graph_batch(batch_data).to(device)
 
@@ -167,7 +171,7 @@ class SuGAREnsemble(nn.Module):
             "per_view_logits": [],
         }
 
-        for view_idx in range(self.num_views):
+        for view_idx in views:
             sampled_fragment_batch, eligible_mask = self.fragment_edge_samplers[view_idx](
                 fragment_batch
             )
@@ -192,7 +196,7 @@ class SuGAREnsemble(nn.Module):
         agg_weights = self._aggregate_weights(all_soft_weights)
         edge_batch = fragment_batch.batch[fragment_batch.edge_index[0]]
         bool_mask = FragmentMasker._topk_mask(
-            agg_weights.detach(), edge_batch, self.fragment_maskers[0].ratio
+            agg_weights.detach(), edge_batch, self.fragment_maskers[views[0]].ratio
         )
         atom_batch = reconstruct_batch(
             batch_data, bool_mask, selected_fragment_edge_weight=agg_weights
@@ -203,7 +207,7 @@ class SuGAREnsemble(nn.Module):
             intermediates["bool_mask"] = bool_mask
 
         all_probs = []
-        for view_idx in range(self.num_views):
+        for view_idx in views:
             classifier = self.atom_classifiers[view_idx]
 
             if return_intermediates:
@@ -213,7 +217,7 @@ class SuGAREnsemble(nn.Module):
                 intermediates["per_view_logits"].append(logits)
             else:
                 logits = classifier(atom_batch)
-                
+
             all_probs.append(F.softmax(logits, dim=-1))
 
         avg_probs = torch.stack(all_probs, dim=0).mean(dim=0)  # [batch, num_classes]

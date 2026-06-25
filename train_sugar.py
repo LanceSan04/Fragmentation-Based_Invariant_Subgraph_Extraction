@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from src.data.dataloader import build_split_dataloaders
 from src.models.sugar_ensemble import SuGAREnsemble
 from src.training.sugar_trainer import SuGARTrainer
+from src.training.model_selection import greedy_view_selection, _accuracy_on_loader
 
 
 @dataclass
@@ -137,6 +138,16 @@ def main(args):
         print("\nEvaluating on test set...")
         test_loss, test_acc = trainer.evaluate(test_loader)
         print(f"Test Loss: {test_loss:.4f} | Test Accuracy: {test_acc:.4f}")
+
+    # Greedy view selection; requires num_views > 1 and a validation set to score candidate subsets.
+    if config.get("greedy_model_selection", False) and val_loader is not None:
+        print("\nRunning greedy view selection on validation set...")
+        selected_views = greedy_view_selection(model, val_loader, device)
+
+        if test_loader is not None:
+            print("\nEvaluating greedy-selected ensemble on test set...")
+            test_acc_greedy = _accuracy_on_loader(model, test_loader, device, view_indices=selected_views)
+            print(f"Test Accuracy (greedy-selected views {selected_views}): {test_acc_greedy:.4f}")
 
     # Save model
     if config.save_model:

@@ -131,7 +131,7 @@ num_classes: 2
 gnn_layers: 3
 hidden_dim: 128
 edge_ratio: 0.5
-num_views: 1
+num_views: 5
 dropout: 0.1
 
 # Training-time random fragment-edge sampler.
@@ -160,6 +160,11 @@ num_envs: 1
 contrast_temperature: 0.5
 contrast_sampling: mul
 
+# Post-training greedy view selection
+# Only meaningful when num_views > 1.
+greedy_model_selection: true
+aggregation: mean
+
 # Smoke-mode inline records grouped by split.
 # For smoke mode, comment out raw_path above, set dataset/processed_dir back to
 # smoke paths, and uncomment this block.
@@ -185,7 +190,6 @@ contrast_sampling: mul
 #       label: 0
 #       environment: debug_test
 
-# Future full-SuGAr options:
-# aggregation: mean
+
+
 # weight_averaging: false
-# greedy_model_selection: false
