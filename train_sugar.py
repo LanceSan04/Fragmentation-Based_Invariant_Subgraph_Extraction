@@ -1,5 +1,11 @@
 #!/usr/bin/env python
-"""Main training script for SuGAR ensemble on molecular property prediction."""
+"""Train and evaluate SuGAR on configured molecular split files.
+
+The script expects preprocessed ``.pt`` files under ``processed_dir``. Split
+selection is config-driven: ``train_split`` is optimized, ``validation_split``
+drives validation/checkpointing, ``test_split`` is the primary final report,
+and ``report_splits`` can add side-by-side IID/OOD diagnostics.
+"""
 
 import torch
 import argparse
@@ -51,28 +57,33 @@ def build_config(args):
 
 def main(args):
     """Main training function."""
-    # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() and args.device == "cuda" else "cpu")
-    print(f"Using device: {device}")
-
     # Load configuration. YAML values provide defaults; explicit CLI values
     # override those defaults.
     config = build_config(args)
+
+    # Set device
+    device_name = config.get("device", "cuda")
+    device = torch.device("cuda" if torch.cuda.is_available() and device_name == "cuda" else "cpu")
+    print(f"Using device: {device}")
 
     # Build dataloaders
     print(f"Loading data from {config.processed_dir}...")
     dataloaders = build_split_dataloaders(config.processed_dir, config)
 
-    train_loader = dataloaders.get("train")
-    val_loader = dataloaders.get("valid")
-    test_loader = dataloaders.get("test")
+    train_split = config.get("train_split", "train")
+    validation_split = config.get("validation_split", config.get("valid_split", "valid"))
+    test_split = config.get("test_split", "test")
+
+    train_loader = dataloaders.get(train_split)
+    val_loader = dataloaders.get(validation_split)
+    test_loader = dataloaders.get(test_split)
 
     if train_loader is None:
-        raise ValueError(f"No training data found in {config.processed_dir}")
+        raise ValueError(f"No training data found for split {train_split!r} in {config.processed_dir}")
 
-    keys_to_remove = ["fragment_to_atoms", "smiles", "molecule_id"]
+    keys_to_remove = ["fragment_to_atoms", "smiles", "molecule_id", "metadata"]
     
-    for loader in [train_loader, val_loader, test_loader]:
+    for loader in dataloaders.values():
         if loader is not None and hasattr(loader, 'dataset'):
             for data in loader.dataset:
                 for key in keys_to_remove:
@@ -104,6 +115,7 @@ def main(args):
         edge_ratio=config.edge_ratio,
         num_views=config.num_views,
         dropout=config.dropout,
+        aggregation_mode=config.get("aggregation_mode", config.get("aggregation", "mean")),
         fragment_edge_dim=fragment_edge_dim,
         atom_edge_dim=atom_edge_dim,
         fragment_sample_ratio=config.fragment_sample_ratio,
@@ -125,7 +137,9 @@ def main(args):
     )
 
     # Train
-    print("Starting training...")
+    if val_loader is None and validation_split is not None:
+        print(f"Validation split {validation_split!r} was not found; training without validation.")
+    print(f"Starting training on split {train_split!r}...")
     history = trainer.train(
         train_loader,
         val_loader=val_loader,
@@ -135,9 +149,19 @@ def main(args):
 
     # Evaluate on test set
     if test_loader is not None:
-        print("\nEvaluating on test set...")
+        print(f"\nEvaluating on test split {test_split!r}...")
         test_loss, test_acc = trainer.evaluate(test_loader)
-        print(f"Test Loss: {test_loss:.4f} | Test Accuracy: {test_acc:.4f}")
+        print(f"{test_split} Loss: {test_loss:.4f} | {test_split} Accuracy: {test_acc:.4f}")
+
+    for split_name in config.get("report_splits", []) or []:
+        if split_name in {validation_split, test_split}:
+            continue
+        loader = dataloaders.get(split_name)
+        if loader is None:
+            print(f"Report split {split_name!r} was not found; skipping.")
+            continue
+        loss, acc = trainer.evaluate(loader)
+        print(f"{split_name} Loss: {loss:.4f} | {split_name} Accuracy: {acc:.4f}")
 
     # Greedy view selection; requires num_views > 1 and a validation set to score candidate subsets.
     if config.get("greedy_model_selection", False) and val_loader is not None:
@@ -167,6 +191,9 @@ if __name__ == "__main__":
     parser.add_argument("--config", type=str, default=None, help="Path to YAML config file")
     parser.add_argument("--batch_size", type=int, default=None, help="Batch size")
     parser.add_argument("--num_workers", type=int, default=None, help="Number of data loading workers")
+    parser.add_argument("--train_split", type=str, default=None, help="Processed split to train on")
+    parser.add_argument("--validation_split", type=str, default=None, help="Processed split for validation")
+    parser.add_argument("--test_split", type=str, default=None, help="Processed split for final test")
 
     # Model arguments
     parser.add_argument("--num_classes", type=int, default=None, help="Number of output classes")
@@ -174,6 +201,13 @@ if __name__ == "__main__":
     parser.add_argument("--hidden_dim", type=int, default=None, help="Hidden dimension")
     parser.add_argument("--edge_ratio", type=float, default=None, help="Ratio of edges to keep in invariant subgraph")
     parser.add_argument("--num_views", type=int, default=None, help="Number of SuGAr views/base models")
+    parser.add_argument(
+        "--aggregation_mode",
+        type=str,
+        default=None,
+        choices=["mean", "max"],
+        help="How to aggregate fragment-edge scores across SuGAr views",
+    )
     parser.add_argument(
         "--fragment_sample_ratio",
         type=float,

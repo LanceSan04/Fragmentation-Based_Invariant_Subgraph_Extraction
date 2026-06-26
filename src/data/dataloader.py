@@ -3,7 +3,9 @@
 The sequence-style dataset methods and ``torch_geometric.loader.DataLoader``
 usage are adapted from Group Graph's ``data_loader.py`` and task scripts.
 Loading this project's dual-view records, validating metadata, and configuring
-batching are project-specific.
+batching are project-specific. Split names are config-driven, so loaders can be
+built for either simple ``train/valid/test`` datasets or native DrugOOD splits
+such as ``train/iid_val/ood_val/iid_test/ood_test``.
 """
 
 import os.path as osp
@@ -104,7 +106,7 @@ def build_dataloader(
 
 
 def build_split_dataloaders(processed_dir, config):
-    """Build train, validation, and test loaders from processed split files."""
+    """Build loaders for every configured processed split file that exists."""
     expected_metadata = _expected_metadata(config)
     batch_size = _config_get(config, "batch_size", 32)
     num_workers = _config_get(config, "num_workers", 0)
@@ -112,8 +114,10 @@ def build_split_dataloaders(processed_dir, config):
     seed = _config_get(config, "seed", None)
     follow_batch = _config_get(config, "follow_batch", ["fragment_x_static"])
 
+    train_split = _config_get(config, "train_split", "train")
+
     loaders = {}
-    for split_name in ["train", "valid", "test"]:
+    for split_name in configured_split_names(config):
         split_path = osp.join(processed_dir, f"{split_name}.pt")
         if not osp.exists(split_path):
             continue
@@ -121,9 +125,9 @@ def build_split_dataloaders(processed_dir, config):
         loaders[split_name] = build_dataloader(
             dataset,
             batch_size=batch_size,
-            shuffle=(split_name == "train"),
+            shuffle=(split_name == train_split),
             num_workers=num_workers,
-            drop_last=bool(_config_get(config, "drop_last", False) and split_name == "train"),
+            drop_last=bool(_config_get(config, "drop_last", False) and split_name == train_split),
             pin_memory=pin_memory,
             seed=seed,
             follow_batch=follow_batch,
@@ -133,6 +137,34 @@ def build_split_dataloaders(processed_dir, config):
         raise FileNotFoundError(f"No processed split files found in {processed_dir}")
 
     return loaders
+
+
+def configured_split_names(config):
+    """Return requested split names, preserving order and removing duplicates.
+
+    ``loader_split_names`` can override loading completely. Otherwise the
+    function uses ``split_names`` from preprocessing, or falls back to
+    train/validation/test plus any ``report_splits`` configured for evaluation.
+    """
+    configured = _config_get(config, "loader_split_names", None)
+    if configured is None:
+        configured = _config_get(config, "split_names", None)
+    if configured is None:
+        configured = [
+            _config_get(config, "train_split", "train"),
+            _config_get(config, "validation_split", _config_get(config, "valid_split", "valid")),
+            _config_get(config, "test_split", "test"),
+        ]
+        configured.extend(_config_get(config, "report_splits", []) or [])
+
+    names = []
+    for split_name in configured:
+        if split_name is None:
+            continue
+        split_name = str(split_name)
+        if split_name not in names:
+            names.append(split_name)
+    return names
 
 
 def validate_dataloader_batch(batch):

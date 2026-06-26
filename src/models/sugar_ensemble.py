@@ -155,11 +155,14 @@ class SuGAREnsemble(nn.Module):
                            'atom_graphs', 'embeddings', 'per_view_logits'
         """
         views = list(view_indices) if view_indices is not None else list(range(self.num_views))
+        if not views:
+            raise ValueError("view_indices must contain at least one view")
 
         device = batch_data.x.device
         fragment_batch = build_fragment_graph_batch(batch_data).to(device)
 
         all_soft_weights = []
+        all_eligible_masks = []
         intermediates = {
             "bool_mask": None,
             "fragment_scores": [],
@@ -185,6 +188,7 @@ class SuGAREnsemble(nn.Module):
                 sampled_edge_scores,
             )
             all_soft_weights.append(edge_scores)
+            all_eligible_masks.append(eligible_mask)
 
             if return_intermediates:
                 intermediates["fragment_scores"].append(edge_scores)
@@ -194,9 +198,16 @@ class SuGAREnsemble(nn.Module):
 
         # Aggregate across maskers, then single top-k → one shared subgraph G_c^bm
         agg_weights = self._aggregate_weights(all_soft_weights)
+        aggregate_eligible_mask = torch.stack(
+            [mask.to(device=agg_weights.device, dtype=torch.bool) for mask in all_eligible_masks],
+            dim=0,
+        ).any(dim=0)
         edge_batch = fragment_batch.batch[fragment_batch.edge_index[0]]
-        bool_mask = FragmentMasker._topk_mask(
-            agg_weights.detach(), edge_batch, self.fragment_maskers[views[0]].ratio
+        bool_mask = self._topk_mask_over_eligible(
+            agg_weights.detach(),
+            edge_batch,
+            self.fragment_maskers[views[0]].ratio,
+            aggregate_eligible_mask,
         )
         atom_batch = reconstruct_batch(
             batch_data, bool_mask, selected_fragment_edge_weight=agg_weights
@@ -227,6 +238,25 @@ class SuGAREnsemble(nn.Module):
         if return_intermediates:
             return predictions, intermediates
         return predictions
+
+    @staticmethod
+    def _topk_mask_over_eligible(scores, edge_batch, ratio, eligible_mask):
+        """Select top-k edges per graph while forbidding sampler-dropped edges."""
+        mask = torch.zeros_like(scores, dtype=torch.bool)
+        if scores.numel() == 0:
+            return mask
+
+        eligible_mask = eligible_mask.to(device=scores.device, dtype=torch.bool)
+        for gid in edge_batch.unique():
+            graph_idx = (edge_batch == gid).nonzero(as_tuple=True)[0]
+            eligible_idx = graph_idx[eligible_mask[graph_idx]]
+            if eligible_idx.numel() == 0:
+                continue
+
+            k = max(1, int(eligible_idx.numel() * ratio))
+            top_local = scores[eligible_idx].topk(min(k, eligible_idx.numel()), largest=True).indices
+            mask[eligible_idx[top_local]] = True
+        return mask
 
     @staticmethod
     def _restore_full_edge_outputs(

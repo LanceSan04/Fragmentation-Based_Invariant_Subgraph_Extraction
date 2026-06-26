@@ -174,6 +174,24 @@ class SoftVoteOutputTests(unittest.TestCase):
         self.assertEqual(preds.shape, (3,))
         self.assertTrue(((preds == 0) | (preds == 1)).all())
 
+    def test_view_indices_runs_only_selected_views(self):
+        model = _make_model(self.batch, num_views=4)
+        model.eval()
+        with torch.no_grad():
+            out, intermediates = model(
+                self.batch,
+                return_intermediates=True,
+                view_indices=[1, 3],
+            )
+        self.assertEqual(out.shape, (3, 2))
+        self.assertEqual(len(intermediates["fragment_scores"]), 2)
+        self.assertEqual(len(intermediates["per_view_logits"]), 2)
+
+    def test_empty_view_indices_raises(self):
+        model = _make_model(self.batch, num_views=2)
+        with self.assertRaises(ValueError):
+            model(self.batch, view_indices=[])
+
 
 # ---------------------------------------------------------------------------
 # Stage 2 + 3: one shared subgraph across all classifiers
