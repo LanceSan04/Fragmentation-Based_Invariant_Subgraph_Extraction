@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# Processed drugood data
+data/processed/drugood_*/
+
 # Distribution / packaging
 .Python
 build/

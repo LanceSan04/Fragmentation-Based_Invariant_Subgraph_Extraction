@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from src.data.dataloader import build_split_dataloaders
 from src.models.sugar_ensemble import SuGAREnsemble
 from src.training.sugar_trainer import SuGARTrainer
-from src.training.model_selection import greedy_view_selection, _accuracy_on_loader
+from src.training.model_selection import greedy_view_selection, _accuracy_on_loader, _auc_on_loader
 
 
 @dataclass
@@ -134,6 +134,7 @@ def main(args):
         num_envs=config.num_envs,
         contrast_temperature=config.contrast_temperature,
         contrast_sampling=config.contrast_sampling,
+        track_roc_auc=config.track_roc_auc,
     )
 
     # Train
@@ -145,13 +146,16 @@ def main(args):
         val_loader=val_loader,
         num_epochs=config.epochs,
         patience=config.patience,
+        restore_best_weights=config.get("greedy_model_selection", False),
     )
 
     # Evaluate on test set
     if test_loader is not None:
         print(f"\nEvaluating on test split {test_split!r}...")
-        test_loss, test_acc = trainer.evaluate(test_loader)
-        print(f"{test_split} Loss: {test_loss:.4f} | {test_split} Accuracy: {test_acc:.4f}")
+        test_loss, test_acc, test_auc = trainer.evaluate(test_loader)
+        auc_str = f" | {test_split} AUC: {test_auc:.4f}" if test_auc is not None else ""
+
+        print(f"{test_split} Loss: {test_loss:.4f} | {test_split} Accuracy: {test_acc:.4f}{auc_str}")
 
     for split_name in config.get("report_splits", []) or []:
         if split_name in {validation_split, test_split}:
@@ -166,12 +170,18 @@ def main(args):
     # Greedy view selection; requires num_views > 1 and a validation set to score candidate subsets.
     if config.get("greedy_model_selection", False) and val_loader is not None:
         print("\nRunning greedy view selection on validation set...")
-        selected_views = greedy_view_selection(model, val_loader, device)
+        selected_views = greedy_view_selection(
+            model, val_loader, device, use_auc=trainer.track_roc_auc
+        )
 
         if test_loader is not None:
             print("\nEvaluating greedy-selected ensemble on test set...")
             test_acc_greedy = _accuracy_on_loader(model, test_loader, device, view_indices=selected_views)
             print(f"Test Accuracy (greedy-selected views {selected_views}): {test_acc_greedy:.4f}")
+            if trainer.track_roc_auc:
+                test_auc_greedy = _auc_on_loader(model, test_loader, device, view_indices=selected_views)
+                if test_auc_greedy is not None:
+                    print(f"Test AUC (greedy-selected views {selected_views}): {test_auc_greedy:.4f}")
 
     # Save model
     if config.save_model:
@@ -241,6 +251,20 @@ if __name__ == "__main__":
     )
     parser.add_argument("--device", type=str, default=None, help="Device (cuda/cpu)")
     parser.add_argument("--save_model", type=str, default=None, help="Path to save trained model")
+    parser.add_argument(
+        "--track_roc_auc",
+        type=lambda x: x.lower() not in ("0", "false", "no"),
+        default=None,
+        metavar="BOOL",
+        help="Track ROC-AUC during validation (true/false)",
+    )
+    parser.add_argument(
+        "--greedy_model_selection",
+        type=lambda x: x.lower() not in ("0", "false", "no"),
+        default=None,
+        metavar="BOOL",
+        help="Run greedy view selection after training (true/false)",
+    )
 
     args = parser.parse_args()
     main(args)
