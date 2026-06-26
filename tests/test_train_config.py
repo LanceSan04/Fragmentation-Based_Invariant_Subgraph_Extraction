@@ -61,12 +61,46 @@ class TrainConfigTests(unittest.TestCase):
                 "lambda_diversity": 0.2,
                 "lambda_irm": 0.0,
                 "num_envs": 1,
+                "aggregation_mode": "max",
+                "greedy_model_selection": True,
             }
         )
 
         self.assertEqual(
             preprocessing_config_hash(base),
             preprocessing_config_hash(changed_training),
+        )
+
+    def test_split_selection_overrides_do_not_change_preprocessing_hash(self):
+        base = {
+            "preprocess_version": "0.1.0",
+            "dataset": "drugood_lbap_core_ec50_assay",
+            "raw_format": "drugood_json",
+            "raw_path": "data/raw/drugood/lbap_core_ec50_assay.json",
+            "split_names": ["train", "iid_val", "ood_val", "iid_test", "ood_test"],
+            "smiles_key": "smiles",
+            "label_key": "cls_label",
+            "environment_key": "domain_id",
+            "metadata_keys": ["assay_id", "reg_label", "domain_id"],
+            "fragmentation": "group_graph",
+            "pooling": "mean_atom_and_internal_bond",
+            "atom_feature_dim": 133,
+            "bond_feature_dim": 14,
+            "fragment_feature_dim": 149,
+        }
+        changed_selection = dict(base)
+        changed_selection.update(
+            {
+                "train_split": "train",
+                "validation_split": "ood_val",
+                "test_split": "ood_test",
+                "report_splits": ["iid_val", "iid_test"],
+            }
+        )
+
+        self.assertEqual(
+            preprocessing_config_hash(base),
+            preprocessing_config_hash(changed_selection),
         )
 
 

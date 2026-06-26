@@ -51,6 +51,9 @@ coverage.xml
 .pytest_cache/
 cover/
 
+# Generated DrugOOD preprocessing artifacts
+data/processed/drugood_*/
+
 # Translations
 *.mo
 *.pot

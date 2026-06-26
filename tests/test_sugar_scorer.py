@@ -125,7 +125,7 @@ class SuGArScorerTests(unittest.TestCase):
         model.train()
         logits, intermediates = model(batch, return_intermediates=True)
         eligible_mask = intermediates["eligible_fragment_masks"][0]
-        selected_mask = intermediates["fragment_masks"][0]
+        selected_mask = intermediates["bool_mask"]
         sampled_edge_ids = intermediates["sampled_fragment_edge_ids"][0]
 
         self.assertEqual(logits.size(0), batch.y.numel())
@@ -144,7 +144,7 @@ class SuGArScorerTests(unittest.TestCase):
         with torch.no_grad():
             _, eval_intermediates = model(batch, return_intermediates=True)
         eval_eligible_mask = eval_intermediates["eligible_fragment_masks"][0]
-        eval_selected_mask = eval_intermediates["fragment_masks"][0]
+        eval_selected_mask = eval_intermediates["bool_mask"]
 
         self.assertTrue(torch.all(eval_eligible_mask))
         self.assertTrue(torch.all(eval_selected_mask))

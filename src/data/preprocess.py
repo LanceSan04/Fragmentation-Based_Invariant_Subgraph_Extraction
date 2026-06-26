@@ -1,22 +1,37 @@
 """Dataset preprocessing coordinator.
 
 The load-convert-save pattern is based on Group Graph's data_loader.py.
-Dual-view graph construction, metadata, splitting, and cache validation are
-project-specific.
+Dual-view graph construction, DrugOOD split preservation, metadata, and cache
+validation are project-specific.
 
 Run the preprocessing pipeline from the repository root with:
 
     .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\experiment.yaml
 
+For the local DrugOOD assay data, switch ``configs/experiment.yaml`` to the
+DrugOOD fields documented there, then run:
+
+    .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\experiment.yaml --validate-loaders
+
 To also verify the saved .pt files can be loaded and batched, add:
 
     --validate-loaders
 
-Preprocessing writes one .pt file per split under config["processed_dir"]:
+Preprocessing writes one .pt file per selected split under
+config["processed_dir"]. For a simple ratio split this is usually:
 
     train.pt
     valid.pt
     test.pt
+
+For native DrugOOD JSON, split names are preserved from the source file. The
+current LBAP config writes:
+
+    train.pt
+    iid_val.pt
+    ood_val.pt
+    iid_test.pt
+    ood_test.pt
 
 Each .pt file contains:
 
@@ -29,6 +44,7 @@ Each .pt file contains:
             "bond_feature_dim": 14,
             "fragment_feature_dim": 149,
             "config_hash": "...",
+            "source": {...},  # present for native split sources such as DrugOOD
         },
         "molecule_data": [MoleculeData, MoleculeData, ...],
     }
@@ -39,11 +55,13 @@ bond_ids, directed_edge_to_bond, fragment_x_static, fragment_edge_index,
 fragment_edge_attr, atom_to_fragment, fragment_to_atom_index,
 fragment_edge_to_bond, fragment_edge_to_bond_index,
 fragment_edge_to_attachment_atoms, fragment_types, fragment_smiles, smiles,
-molecule_id, and y. Here, x/edge_index/edge_attr are the atom-level PyG
-message-passing tensors; bond_index/bond_attr are the unique original bond
-table; fragment_x_static stores pooled no-GNN fragment features; and
-fragment_to_atom_index is a sparse [2, num_atoms] mapping from fragment IDs to
-original atom IDs.
+molecule_id, metadata, environment_or_group, and y. Here,
+x/edge_index/edge_attr are the atom-level PyG message-passing tensors;
+bond_index/bond_attr are the unique original bond table; fragment_x_static
+stores pooled no-GNN fragment features; environment_or_group stores the
+configured domain/environment value; metadata stores non-model provenance such
+as DrugOOD assay IDs and source split names; and fragment_to_atom_index is a
+sparse [2, num_atoms] mapping from fragment IDs to original atom IDs.
 
 Example smoke molecule shape summary:
 
@@ -86,7 +104,12 @@ from src.models.fragment_pooler import FRAGMENT_FEATURE_DIM
 
 
 def load_raw_records(config):
-    """Load raw records from config-provided records or a simple data file."""
+    """Load flat raw records from inline config data, CSV/TSV, JSON, or JSONL.
+
+    This helper is for unsplit or split-column datasets. Native split payloads,
+    such as DrugOOD JSON files with a top-level ``split`` mapping, should go
+    through ``load_raw_dataset`` so named splits are preserved.
+    """
     _debug_print(config, "Loading raw records")
     records = _config_get(config, "records")
     if records is not None:
@@ -111,6 +134,11 @@ def load_raw_records(config):
         with open(raw_path, encoding="utf-8") as handle:
             payload = json.load(handle)
         if isinstance(payload, dict):
+            if "split" in payload:
+                raise ValueError(
+                    "JSON contains native split data. Use load_raw_dataset() so split names "
+                    "such as train, iid_val, ood_val, iid_test, and ood_test are preserved."
+                )
             records = payload.get("records", [])
         else:
             records = payload
@@ -126,8 +154,72 @@ def load_raw_records(config):
     raise ValueError(f"Unsupported raw data format: {raw_path}")
 
 
-def process_record(record, config):
-    """Convert one raw record into a validated MoleculeExample."""
+def load_raw_dataset(config):
+    """Load raw data as a mapping of split name to records.
+
+    The preferred path is an explicit ``splits`` config or a native DrugOOD JSON
+    file with top-level ``cfg``, ``split``, and ``statistics`` keys. Flat files
+    fall back to either a configured split column or deterministic ratio splits.
+    """
+    split_records = _config_get(config, "splits")
+    if split_records is not None:
+        return dict(split_records), {}
+
+    raw_path = _config_get(config, "raw_path")
+    raw_format = str(_config_get(config, "raw_format", "") or "").lower()
+    if raw_path is not None and osp.splitext(raw_path)[1].lower() == ".json":
+        with open(raw_path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if isinstance(payload, dict) and "split" in payload:
+            if raw_format not in {"", "drugood_json"}:
+                raise ValueError(f"Unsupported split JSON raw_format: {raw_format!r}")
+            split_records = select_split_records(payload["split"], config)
+            return split_records, {
+                "raw_format": raw_format or "drugood_json",
+                "source_cfg": payload.get("cfg"),
+                "source_statistics": payload.get("statistics"),
+                "source_split_names": list(payload["split"].keys()),
+            }
+
+    records = load_raw_records(config)
+    split_key = _config_get(config, "split_key", "split")
+    if records and isinstance(records[0], dict) and split_key in records[0]:
+        split_records = {}
+        for record in records:
+            split_name = str(record[split_key])
+            split_records.setdefault(split_name, []).append(record)
+    else:
+        split_records = split_records_by_ratio(records, config)
+    return split_records, {}
+
+
+def select_split_records(raw_splits, config):
+    """Return configured native splits while preserving source split names."""
+    if not isinstance(raw_splits, dict):
+        raise ValueError("Native split payload must be a mapping of split name to records")
+
+    requested = _config_get(config, "split_names", None)
+    if requested is None:
+        return {str(name): list(records) for name, records in raw_splits.items()}
+
+    selected = {}
+    for split_name in requested:
+        split_name = str(split_name)
+        if split_name not in raw_splits:
+            available = ", ".join(sorted(str(name) for name in raw_splits))
+            raise ValueError(f"Requested split {split_name!r} not found. Available: {available}")
+        selected[split_name] = list(raw_splits[split_name])
+    return selected
+
+
+def process_record(record, config, split_name=None, split_index=None):
+    """Convert one raw record into a validated dual-view MoleculeExample.
+
+    Field names are config-driven. For DrugOOD, ``smiles_key`` normally points
+    to ``smiles``, ``label_key`` to ``cls_label``, and ``environment_key`` to
+    ``domain_id``. Source-only values such as ``assay_id`` and ``reg_label`` can
+    be retained through ``metadata_keys`` without being fed to the model.
+    """
     smiles_key = _config_get(config, "smiles_key", "smiles")
     label_key = _config_get(config, "label_key", "label")
     environment_key = _config_get(config, "environment_key", "environment")
@@ -143,6 +235,9 @@ def process_record(record, config):
     label = _coerce_label(label)
     environment_or_group = _record_get(record, environment_key, None)
     molecule_id = _record_get(record, molecule_id_key, None)
+    if molecule_id is None and bool(_config_get(config, "generate_molecule_id", True)):
+        molecule_id = generated_molecule_id(config, split_name, split_index)
+    metadata = record_metadata(record, config, split_name=split_name, split_index=split_index)
     fragmenter = build_fragmenter(_config_get(config, "fragmentation", "group_graph"))
 
     example = build_molecule_example(
@@ -150,6 +245,7 @@ def process_record(record, config):
         label=label,
         environment_or_group=environment_or_group,
         molecule_id=molecule_id,
+        metadata=metadata,
         fragmenter=fragmenter,
         pooling=_config_get(config, "pooling", "mean_atom_and_internal_bond"),
     )
@@ -165,8 +261,31 @@ def process_record(record, config):
     return example
 
 
-def process_split(records, config):
-    """Process every record in one split."""
+def generated_molecule_id(config, split_name, split_index):
+    """Create a stable fallback ID for sources without molecule identifiers."""
+    dataset = _config_get(config, "dataset", "dataset")
+    if split_name is None or split_index is None:
+        return None
+    return f"{dataset}:{split_name}:{split_index}"
+
+
+def record_metadata(record, config, split_name=None, split_index=None):
+    """Collect non-model provenance that should survive preprocessing."""
+    metadata = {}
+    if split_name is not None:
+        metadata["split"] = split_name
+    if split_index is not None:
+        metadata["split_index"] = split_index
+
+    for key in _config_get(config, "metadata_keys", []) or []:
+        value = _record_get(record, key, None)
+        if value is not None:
+            metadata[key] = value
+    return metadata or None
+
+
+def process_split(records, config, split_name=None):
+    """Process every record in one named split."""
     examples = []
     failures = []
     strict = bool(_config_get(config, "strict", True))
@@ -175,7 +294,7 @@ def process_split(records, config):
         try:
             if _should_debug_record(config, index, len(records)):
                 _debug_print(config, f"Record {index + 1}/{len(records)}")
-            examples.append(process_record(record, config))
+            examples.append(process_record(record, config, split_name=split_name, split_index=index))
         except Exception as exc:
             if strict:
                 raise
@@ -219,7 +338,7 @@ def save_processed_split(examples, metadata, output_path, config=None):
 
 
 def run_preprocessing(config):
-    """Run preprocessing for configured splits and save processed .pt files."""
+    """Run preprocessing for configured splits and save one .pt file per split."""
     _debug_print(config, "Starting preprocessing")
     metadata = build_metadata(config)
     _debug_print(
@@ -233,23 +352,15 @@ def run_preprocessing(config):
     if processed_dir is None:
         raise ValueError("config must provide processed_dir")
 
-    split_records = _config_get(config, "splits")
-    if split_records is None:
-        split_key = _config_get(config, "split_key", "split")
-        records = load_raw_records(config)
-        if records and isinstance(records[0], dict) and split_key in records[0]:
-            split_records = {}
-            for record in records:
-                split_name = str(record[split_key])
-                split_records.setdefault(split_name, []).append(record)
-        else:
-            split_records = split_records_by_ratio(records, config)
+    split_records, source_metadata = load_raw_dataset(config)
+    if source_metadata:
+        metadata["source"] = source_metadata
 
     outputs = {}
     failures = {}
     for split_name, records in split_records.items():
         _debug_print(config, f"Processing split '{split_name}' with {len(records)} records")
-        examples, split_failures = process_split(records, config)
+        examples, split_failures = process_split(records, config, split_name=split_name)
         output_path = osp.join(processed_dir, f"{split_name}.pt")
         save_processed_split(examples, metadata, output_path, config=config)
         outputs[split_name] = output_path
@@ -321,7 +432,7 @@ def save_failure_report(failures, config, processed_dir):
 
 
 def split_records_by_ratio(records, config):
-    """Create deterministic train/valid/test splits when raw data has no split column."""
+    """Create deterministic ratio splits when raw data has no native split."""
     ratios = _config_get(
         config,
         "split_ratios",

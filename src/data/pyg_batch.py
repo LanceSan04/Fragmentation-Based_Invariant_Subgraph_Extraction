@@ -84,5 +84,7 @@ def molecule_example_to_data(example) -> MoleculeData:
         data_kwargs["smiles"] = example.smiles
     if example.molecule_id is not None:
         data_kwargs["molecule_id"] = example.molecule_id
+    if example.metadata is not None:
+        data_kwargs["metadata"] = dict(example.metadata)
 
     return MoleculeData(**data_kwargs)

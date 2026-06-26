@@ -13,6 +13,7 @@ import os.path as osp
 import tempfile
 import unittest
 import csv
+import json
 
 import torch
 from torch_geometric.data import Batch
@@ -244,6 +245,85 @@ class FragmentPipelineTests(unittest.TestCase):
             self.assertEqual(rows[0]["split"], "train")
             self.assertEqual(rows[0]["molecule_id"], "bad")
             self.assertIn("RDKit could not parse SMILES", rows[0]["error"])
+
+    def test_preprocessing_preserves_drugood_native_splits_and_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            raw_path = osp.join(tmp_dir, "drugood.json")
+            payload = {
+                "cfg": {"domain": {"domain_name": "assay"}},
+                "statistics": {"positive_rate": 0.5},
+                "split": {
+                    "train": [
+                        {
+                            "smiles": "CC",
+                            "cls_label": 1,
+                            "domain_id": 10,
+                            "assay_id": 100,
+                            "reg_label": 5.4,
+                        }
+                    ],
+                    "iid_val": [
+                        {
+                            "smiles": "CCC",
+                            "cls_label": 0,
+                            "domain_id": 10,
+                            "assay_id": 100,
+                            "reg_label": 4.2,
+                        }
+                    ],
+                    "ood_val": [
+                        {
+                            "smiles": "CO",
+                            "cls_label": 1,
+                            "domain_id": 20,
+                            "assay_id": 200,
+                            "reg_label": 6.1,
+                        }
+                    ],
+                },
+            }
+            with open(raw_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+
+            processed_dir = osp.join(tmp_dir, "processed")
+            config = {
+                "dataset": "drugood_test",
+                "preprocess_version": "0.1.0",
+                "raw_format": "drugood_json",
+                "raw_path": raw_path,
+                "processed_dir": processed_dir,
+                "fragmentation": "group_graph",
+                "pooling": "mean_atom_and_internal_bond",
+                "smiles_key": "smiles",
+                "label_key": "cls_label",
+                "environment_key": "domain_id",
+                "molecule_id_key": None,
+                "split_names": ["train", "iid_val", "ood_val"],
+                "metadata_keys": ["assay_id", "reg_label", "domain_id"],
+                "strict": False,
+                "debug": False,
+                "batch_size": 1,
+                "train_split": "train",
+                "validation_split": "ood_val",
+                "test_split": "iid_val",
+            }
+
+            result = run_preprocessing(config)
+
+            self.assertEqual(set(result["outputs"]), {"train", "iid_val", "ood_val"})
+            train_payload = torch.load(result["outputs"]["train"], map_location="cpu", weights_only=False)
+            self.assertEqual(train_payload["metadata"]["source"]["raw_format"], "drugood_json")
+            data = train_payload["molecule_data"][0]
+            self.assertEqual(data.y.tolist(), [1.0])
+            self.assertEqual(data.environment_or_group, 10)
+            self.assertEqual(data.molecule_id, "drugood_test:train:0")
+            self.assertEqual(data.metadata["split"], "train")
+            self.assertEqual(data.metadata["assay_id"], 100)
+            self.assertEqual(data.metadata["domain_id"], 10)
+
+            loaders = build_split_dataloaders(processed_dir, config)
+            self.assertEqual(set(loaders), {"train", "iid_val", "ood_val"})
+            validate_dataloader_batch(next(iter(loaders["ood_val"])))
 
     def test_single_fragment_reconstruction_keeps_full_graph_without_edges(self):
         data = self.build_data("c1ccccc1", "group_graph")
