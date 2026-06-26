@@ -146,7 +146,7 @@ weight_decay: 0.0
 epochs: 100
 patience: 20
 device: cuda
-save_model:
+save_model:   # Path to save the trained model. Leave empty to skip saving.
 
 # Auxiliary loss settings.
 # Contrastive and diversity losses are active by default for SuGAr-style
@@ -159,6 +159,7 @@ lambda_irm: 0.0
 num_envs: 1
 contrast_temperature: 0.5
 contrast_sampling: mul
+track_roc_auc: true
 
 # Post-training greedy view selection
 # Only meaningful when num_views > 1.
