@@ -164,8 +164,9 @@ def main(args):
         if loader is None:
             print(f"Report split {split_name!r} was not found; skipping.")
             continue
-        loss, acc = trainer.evaluate(loader)
-        print(f"{split_name} Loss: {loss:.4f} | {split_name} Accuracy: {acc:.4f}")
+        loss, acc, auc = trainer.evaluate(loader)
+        auc_str = f" | {split_name} AUC: {auc:.4f}" if auc is not None else ""
+        print(f"{split_name} Loss: {loss:.4f} | {split_name} Accuracy: {acc:.4f}{auc_str}")
 
     # Greedy view selection; requires num_views > 1 and a validation set to score candidate subsets.
     if config.get("greedy_model_selection", False) and val_loader is not None:
@@ -177,11 +178,11 @@ def main(args):
         if test_loader is not None:
             print("\nEvaluating greedy-selected ensemble on test set...")
             test_acc_greedy = _accuracy_on_loader(model, test_loader, device, view_indices=selected_views)
-            print(f"Test Accuracy (greedy-selected views {selected_views}): {test_acc_greedy:.4f}")
+            print(f"{test_split} Accuracy (greedy-selected views {selected_views}): {test_acc_greedy:.4f}")
             if trainer.track_roc_auc:
                 test_auc_greedy = _auc_on_loader(model, test_loader, device, view_indices=selected_views)
                 if test_auc_greedy is not None:
-                    print(f"Test AUC (greedy-selected views {selected_views}): {test_auc_greedy:.4f}")
+                    print(f"{test_split} AUC (greedy-selected views {selected_views}): {test_auc_greedy:.4f}")
 
     # Save model
     if config.save_model:
