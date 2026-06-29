@@ -3,7 +3,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from src.models.fragment_graph_ciga import FragmentMasker, SimpleGNN
+from src.models.fragment_masker import FragmentMasker
+from src.models.gnn_encoders import SimpleGAT
 from src.models.fragment_graph import build_fragment_graph_batch
 from src.models.fragment_edge_sampler import FragmentEdgeSampler
 from src.models.atom_reconstructor import reconstruct_batch
@@ -11,7 +12,7 @@ from src.data.atom_graph import ATOM_FDIM, BOND_FDIM
 
 
 class AtomClassifier(nn.Module):
-    """GNN classifier for atom-level invariant subgraphs.
+    """GAT classifier for atom-level invariant subgraphs.
 
     Expects atom graphs produced by atom_reconstructor.reconstruct_batch —
     subgraphs already pruned to the invariant fragment selection.
@@ -27,7 +28,7 @@ class AtomClassifier(nn.Module):
         edge_dim=BOND_FDIM,
     ):
         super().__init__()
-        self.gnn = SimpleGNN(input_dim, hidden_dim, num_layers, dropout, edge_dim=edge_dim)
+        self.gnn = SimpleGAT(input_dim, hidden_dim, num_layers, dropout, edge_dim=edge_dim)
         self.pred_head = nn.Sequential(
             nn.Linear(hidden_dim, 2 * hidden_dim),
             nn.ReLU(),
