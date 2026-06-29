@@ -57,7 +57,15 @@ def build_fragment_graph_batch(molecule_batch):
         )
         fragment_graphs.append(frag_graph)
     
-    # Batch all fragment graphs together
+    # Batch all fragment graphs together. The edge order produced here matches
+    # the order used by reconstruct_batch(batch, full_edge_mask), so these ids
+    # are the bridge from sampled fragment graphs back to the full molecule
+    # provenance tensors.
     batched_frag_graph = Batch.from_data_list(fragment_graphs)
+    batched_frag_graph.full_fragment_edge_id = torch.arange(
+        batched_frag_graph.edge_index.size(1),
+        dtype=torch.long,
+        device=batched_frag_graph.edge_index.device,
+    )
     
     return batched_frag_graph

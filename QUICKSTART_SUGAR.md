@@ -30,7 +30,7 @@ The script will:
 
 ### Train with Config File
 ```bash
-python train_sugar.py --config configs/sugar.yaml
+python train_sugar.py --config configs/experiment.yaml
 ```
 
 ### GPU Training

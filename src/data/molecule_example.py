@@ -37,6 +37,7 @@ class MoleculeExample:
     environment_or_group: Optional[Any] = None
     smiles: Optional[str] = None
     molecule_id: Optional[Any] = None
+    metadata: Optional[Any] = None
 
     def validate(self):
         """Validate both graph views and all cross-level provenance."""
@@ -121,6 +122,7 @@ def build_molecule_example(
     label=None,
     environment_or_group=None,
     molecule_id=None,
+    metadata=None,
     fragmenter=None,
     pooling="mean_atom_and_internal_bond",
 ):
@@ -174,6 +176,7 @@ def build_molecule_example(
         environment_or_group=environment_or_group,
         smiles=smiles,
         molecule_id=molecule_id,
+        metadata=metadata,
     ).validate()
 
 

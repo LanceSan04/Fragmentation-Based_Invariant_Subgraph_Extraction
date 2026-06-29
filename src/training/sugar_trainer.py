@@ -1,9 +1,21 @@
 """Training pipeline for SuGAr ensemble with multi-view fragment learning."""
 
+from copy import deepcopy
+
 import torch
-import torch.nn as nn
 from torch.optim import Adam
 from tqdm import tqdm
+
+try:
+    from sklearn.metrics import roc_auc_score as _sklearn_roc_auc
+    _SKLEARN_AVAILABLE = True
+except ImportError:
+    _SKLEARN_AVAILABLE = False
+
+from src.losses.prediction import prediction_loss
+from src.losses.supervised_contrastive import supervised_contrastive_loss
+from src.losses.diversity import pairwise_diversity_loss
+from src.losses.irm import invariant_risk_loss
 
 
 class SuGARTrainer:
@@ -15,6 +27,13 @@ class SuGARTrainer:
         device="cpu",
         learning_rate=0.001,
         weight_decay=0.0,
+        lambda_contrast=1.0,
+        lambda_diversity=1.0,
+        lambda_irm=0.0,
+        num_envs=1,
+        contrast_temperature=0.5,
+        contrast_sampling="mul",
+        track_roc_auc=True,
     ):
         """
         Args:
@@ -22,11 +41,36 @@ class SuGARTrainer:
             device: Device to train on (cpu/cuda)
             learning_rate: Learning rate for optimizer
             weight_decay: Weight decay for regularization
+            lambda_contrast: Weight for supervised contrastive loss (0 disables it)
+            lambda_diversity: Weight for pairwise diversity loss (0 disables it)
+            lambda_irm: Weight for IRM penalty. IRM is disabled unless this is
+                greater than 0 and num_envs is greater than 1.
+            num_envs: Number of environment partitions available for IRM. The
+                current implementation still uses provisional random binary
+                assignments when IRM is enabled, so keep this at 1 unless a run
+                is deliberately testing the IRM path.
+            contrast_temperature: Temperature for supervised contrastive loss
+            contrast_sampling: Sampling mode for contrastive loss ('mul', 'var', 'cnc')
+            track_roc_auc: Compute ROC-AUC during evaluate(). Requires scikit-learn.
+                For binary tasks uses the positive-class probability; for multiclass
+                uses macro-averaged one-vs-rest AUC.
         """
         self.model = model.to(device)
         self.device = device
         self.optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-        self.loss_fn = nn.CrossEntropyLoss()
+        self.lambda_contrast = lambda_contrast
+        self.lambda_diversity = lambda_diversity
+        self.lambda_irm = lambda_irm
+        self.num_envs = num_envs
+        self.contrast_temperature = contrast_temperature
+        self.contrast_sampling = contrast_sampling
+        self.track_roc_auc = track_roc_auc and _SKLEARN_AVAILABLE
+        if track_roc_auc and not _SKLEARN_AVAILABLE:
+            print("Warning: scikit-learn not found; ROC-AUC tracking disabled.")
+
+    def uses_irm(self):
+        """Return whether the IRM penalty should participate in training."""
+        return self.lambda_irm > 0 and self.num_envs > 1
 
     def train_epoch(self, train_loader):
         """Train for one epoch.
@@ -44,12 +88,26 @@ class SuGARTrainer:
         total = 0
         num_batches = 0
 
+        use_irm = self.uses_irm()
+        use_aux = self.lambda_contrast > 0 or self.lambda_diversity > 0 or use_irm
+
+        # Pre-generate random binary environment assignments for the full dataset,
+        # mirroring SuGAr main.py. Sliced per-batch below.
+        if use_irm:
+            dataset_size = len(train_loader.dataset)
+            env_idx = (torch.sigmoid(torch.randn(dataset_size)) > 0.5).long()
+        else:
+            env_idx = None
+
         pbar = tqdm(train_loader, desc="Training")
-        for batch in pbar:
+        for step, batch in enumerate(pbar):
             batch = batch.to(self.device)
 
-            # Forward pass
-            predictions = self.model(batch)
+            # Forward pass — collect intermediates only when auxiliary losses are active
+            if use_aux:
+                predictions, intermediates = self.model(batch, return_intermediates=True)
+            else:
+                predictions = self.model(batch)
 
             # Get labels
             labels = batch.y
@@ -57,8 +115,51 @@ class SuGARTrainer:
                 labels = labels.squeeze(-1)
             labels = labels.long()
 
-            # Compute loss
-            loss = self.loss_fn(predictions, labels)
+            # Prediction loss
+            loss = prediction_loss(predictions, labels)
+
+            if use_aux:
+                # Supervised contrastive loss over pooled per-view embeddings.
+                # Concatenate views along the batch axis so every molecule
+                # appears once per view, giving more positive/negative pairs.
+                if self.lambda_contrast > 0:
+                    all_emb = torch.cat(intermediates["embeddings"], dim=0)   # [N*V, D]
+                    all_labels = labels.repeat(self.model.num_views)           # [N*V]
+                    if self.contrast_sampling.lower() == "cnc":
+                        y_pred = torch.cat(
+                            [
+                                view_logits.detach().argmax(dim=-1)
+                                for view_logits in intermediates["per_view_logits"]
+                            ],
+                            dim=0,
+                        )
+                    else:
+                        y_pred = None
+                    loss = loss + self.lambda_contrast * supervised_contrastive_loss(
+                        all_emb,
+                        all_labels,
+                        temperature=self.contrast_temperature,
+                        sampling=self.contrast_sampling,
+                        y_pred=y_pred,
+                    )
+
+                # Pairwise diversity loss over aligned fragment-edge score vectors.
+                if self.lambda_diversity > 0 and len(intermediates["fragment_scores"]) > 1:
+                    loss = loss + self.lambda_diversity * pairwise_diversity_loss(
+                        intermediates["fragment_scores"]
+                    )
+
+                # IRM penalty applied to each view's invariant-subgraph logits,
+                # averaged across views (mirrors SuGAr: irm applied to causal_pred).
+                if use_irm:
+                    batch_size = labels.size(0)
+                    start = step * train_loader.batch_size
+                    batch_env = env_idx[start: start + batch_size].to(self.device)
+                    irm_terms = []
+                    for view_logits in intermediates["per_view_logits"]:
+                        irm_terms.append(invariant_risk_loss(view_logits, labels, batch_env))
+                    if irm_terms:
+                        loss = loss + self.lambda_irm * torch.stack(irm_terms).mean()
 
             # Backward pass
             self.optimizer.zero_grad()
@@ -68,13 +169,12 @@ class SuGARTrainer:
 
             total_loss += loss.item()
             num_batches += 1
-            
+
             # Compute running accuracy
             pred_labels = predictions.argmax(dim=-1)
             correct += (pred_labels == labels).sum().item()
             total += labels.size(0)
-            
-            # Update progress bar with both loss and live accuracy
+
             current_acc = correct / total if total > 0 else 0.0
             pbar.set_postfix({"loss": f"{loss.item():.4f}", "acc": f"{current_acc:.4f}"})
 
@@ -86,61 +186,85 @@ class SuGARTrainer:
     @torch.no_grad()
     def evaluate(self, eval_loader):
         """Evaluate on validation/test set.
-        
+
         Args:
             eval_loader: DataLoader with batches of MoleculeData
-            
+
         Returns:
             avg_loss: Average loss
             accuracy: Classification accuracy
+            roc_auc: Macro-averaged ROC-AUC, or None when track_roc_auc is False
+                or when only one class is present in the split.
         """
         self.model.eval()
         total_loss = 0
         correct = 0
         total = 0
         num_batches = 0
+        all_probs = [] if self.track_roc_auc else None
+        all_labels = [] if self.track_roc_auc else None
 
         for batch in eval_loader:
             batch = batch.to(self.device)
 
-            # Forward pass
             predictions = self.model(batch)
 
-            # Get labels
             labels = batch.y
             if labels.dim() == 2:
                 labels = labels.squeeze(-1)
             labels = labels.long()
 
-            # Compute loss
-            loss = self.loss_fn(predictions, labels)
+            loss = prediction_loss(predictions, labels)
             total_loss += loss.item()
 
-            # Compute accuracy
             pred_labels = predictions.argmax(dim=-1)
             correct += (pred_labels == labels).sum().item()
             total += labels.size(0)
             num_batches += 1
 
+            if self.track_roc_auc:
+                probs = torch.softmax(predictions, dim=-1)
+                all_probs.append(probs.cpu())
+                all_labels.append(labels.cpu())
+
         avg_loss = total_loss / num_batches
         accuracy = correct / total if total > 0 else 0.0
 
-        return avg_loss, accuracy
+        roc_auc = None
+        if self.track_roc_auc:
+            all_probs = torch.cat(all_probs, dim=0).numpy()
+            all_labels = torch.cat(all_labels, dim=0).numpy()
+            num_classes = all_probs.shape[1]
+            try:
+                if num_classes == 2:
+                    roc_auc = _sklearn_roc_auc(all_labels, all_probs[:, 1])
+                else:
+                    roc_auc = _sklearn_roc_auc(
+                        all_labels, all_probs, multi_class="ovr", average="macro"
+                    )
+            except ValueError:
+                # Only one class present in this split — AUC is undefined.
+                roc_auc = None
 
-    def train(self, train_loader, val_loader=None, num_epochs=100, patience=20):
+        return avg_loss, accuracy, roc_auc
+
+    def train(self, train_loader, val_loader=None, num_epochs=100, patience=20, restore_best_weights=True):
         """Full training loop.
-        
+
         Args:
             train_loader: Training DataLoader
             val_loader: Validation DataLoader (optional)
             num_epochs: Number of epochs to train
             patience: Early stopping patience
-            
+            restore_best_weights: If True, reload best-val weights after training.
+
         Returns:
             dict: Training history containing train_loss, train_acc, val_loss, val_acc
         """
-        history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": []}
+        history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": [], "val_auc": []}
         best_val_loss = float("inf")
+        best_val_metric = -float("inf")
+        best_weights = None
         patience_counter = 0
 
         for epoch in range(num_epochs):
@@ -151,19 +275,29 @@ class SuGARTrainer:
 
             # Validate
             if val_loader is not None:
-                val_loss, val_acc = self.evaluate(val_loader)
+                val_loss, val_acc, val_auc = self.evaluate(val_loader)
                 history["val_loss"].append(val_loss)
                 history["val_acc"].append(val_acc)
+                history["val_auc"].append(val_auc)
 
+                auc_str = f" | Val AUC: {val_auc:.4f}" if val_auc is not None else ""
                 print(
                     f"Epoch {epoch + 1}/{num_epochs} | "
                     f"Train Loss: {train_loss:.4f} | "
                     f"Train Acc: {train_acc:.4f} | "
                     f"Val Loss: {val_loss:.4f} | "
                     f"Val Acc: {val_acc:.4f}"
+                    f"{auc_str}"
                 )
 
-                # Early stopping
+                # Save best weights by AUC when available, otherwise by accuracy.
+                use_auc_for_selection = self.track_roc_auc and val_auc is not None
+                current_metric = val_auc if use_auc_for_selection else val_acc
+                if current_metric > best_val_metric:
+                    best_val_metric = current_metric
+                    best_weights = deepcopy(self.model.state_dict())
+
+                # Early stopping by validation loss
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
                     patience_counter = 0
@@ -179,5 +313,11 @@ class SuGARTrainer:
                     f"Train Loss: {train_loss:.4f} | "
                     f"Train Acc: {train_acc:.4f}"
                 )
+
+        # Restore the best-performing epoch weights (only needed for greedy view selection)
+        if restore_best_weights and best_weights is not None:
+            self.model.load_state_dict(best_weights)
+            metric_label = "val_auc" if self.track_roc_auc else "val_acc"
+            print(f"Restored best model weights ({metric_label} = {best_val_metric:.4f})")
 
         return history

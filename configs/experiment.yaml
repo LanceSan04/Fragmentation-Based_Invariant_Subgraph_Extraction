@@ -15,8 +15,15 @@
 #
 # 2. Real dataset mode:
 #    Remove or comment out the `splits:` block, then set `dataset`, `raw_path`,
-#    `processed_dir`, and the record key names below. preprocess.py will read
-#    .csv, .tsv, .json, or .jsonl records and group them by `split_key`.
+#    `processed_dir`, and the record key names below.
+#
+#    Flat .csv/.tsv/.json/.jsonl records can be grouped by `split_key` or by
+#    deterministic `split_ratios`.
+#
+#    Native DrugOOD JSON can be enabled by setting:
+#      raw_format: drugood_json
+#      raw_path: data/raw/drugood/lbap_core_ec50_assay.json
+#      split_names: [train, iid_val, ood_val, iid_test, ood_test]
 #
 # Keep `processed_dir` aligned with both the dataset and fragmentation method
 # so outputs from different fragmenters do not overwrite each other.
@@ -28,8 +35,8 @@
 #
 # Real dataset examples:
 #   dataset: bbbp
-#   dataset: drugood_ec50_scaffold
-dataset: bbbp
+#   dataset: drugood_lbap_core_ec50_assay
+dataset: drugood_lbap_core_ec50_assay
 
 # Representation/cache version.
 # Bump this if atom features, bond features, fragmentation rules, pooling, or
@@ -69,11 +76,12 @@ fragment_feature_dim: 149
 #   processed_dir: data/processed/smoke/brics
 #   processed_dir: data/processed/bbbp/group_graph
 #   processed_dir: data/processed/bbbp/brics
-processed_dir: data/processed/bbbp/group_graph
+#   processed_dir: data/processed/drugood_lbap_core_ec50_assay/group_graph
+processed_dir: data/processed/drugood_lbap_core_ec50_assay/group_graph
 
 # When strict is false, skipped records are written here for inspection.
 # If omitted, preprocess.py writes preprocess_failures.csv inside processed_dir.
-failure_report_path: data/processed/bbbp/group_graph/preprocess_failures.csv
+failure_report_path: data/processed/drugood_lbap_core_ec50_assay/group_graph/preprocess_failures.csv
 
 # Real dataset input path.
 # Leave this commented in smoke mode because the inline `splits:` block below
@@ -82,23 +90,53 @@ failure_report_path: data/processed/bbbp/group_graph/preprocess_failures.csv
 # Supported file types:
 #   .csv, .tsv, .json, .jsonl
 #
-raw_path: data/raw/bbbp/BBBP.csv
+raw_path: data/raw/drugood/lbap_core_ec50_assay.json
+raw_format: drugood_json
 
 # Record key names used by process_record(). These must match either the inline
 # records below or the real dataset file columns/keys.
 smiles_key: smiles
-label_key: p_np
-split_key: split
-environment_key: environment
-molecule_id_key: num
+label_key: cls_label
+environment_key: domain_id
+molecule_id_key:
+generate_molecule_id: true
+metadata_keys:
+  - assay_id
+  - reg_label
+  - domain_id
 
-# Used only when raw data has no split column. BBBP's common CSV format has
-# columns num,name,p_np,smiles and no official split field, so preprocessing
-# creates deterministic train/valid/test splits from these ratios.
-split_ratios:
-  train: 0.8
-  valid: 0.1
-  test: 0.1
+# Used only when raw data has no native split dictionary or split column.
+# DrugOOD provides native splits, so keep these commented while this config is
+# in DrugOOD mode.
+#
+# split_key: split
+# split_ratios:
+#   train: 0.8
+#   valid: 0.1
+#   test: 0.1
+
+# Split selection for training/evaluation. For BBBP ratio splits, keep
+# train/valid/test. For DrugOOD, switch these to train/ood_val/ood_test and
+# report IID splits for comparison:
+#
+#   split_names: [train, iid_val, ood_val, iid_test, ood_test]
+#   train_split: train
+#   validation_split: ood_val
+#   test_split: ood_test
+#   report_splits: [iid_val, iid_test]
+#
+split_names:
+  - train
+  - iid_val
+  - ood_val
+  - iid_test
+  - ood_test
+train_split: train
+validation_split: ood_val
+test_split: ood_test
+report_splits:
+  - iid_val
+  - iid_test
 
 # Error handling.
 # Smoke tests can use true so failures are loud. Real datasets often contain
@@ -108,12 +146,12 @@ strict: false
 # Progress logging for preprocess.py.
 # This is intentionally YAML-only; there is no CLI debug flag.
 debug: true
-debug_record_interval: 100
+debug_record_interval: 250
 debug_molecule_details: false
 
 # PyG DataLoader settings used by --validate-loaders.
 # train loaders shuffle automatically; valid/test loaders do not.
-batch_size: 2
+batch_size: 16
 num_workers: 0
 pin_memory: false
 drop_last: false
@@ -123,6 +161,48 @@ seed: 7
 # fragment_x_static creates fragment_x_static_batch after batching.
 follow_batch:
   - fragment_x_static
+
+# SuGAr model settings.
+# These are used by train_sugar.py. The config file provides defaults; explicit
+# CLI values override them for a single run.
+num_classes: 2
+gnn_layers: 3
+hidden_dim: 128
+edge_ratio: 0.5
+num_views: 5
+dropout: 0.1
+
+# Training-time random fragment-edge sampler.
+# 1.0 keeps the full fragment graph. Values below 1.0 enable SuGAr-style
+# random fragment-edge dropping during training only.
+fragment_sample_ratio: 1.0
+sampler_seed: 7
+
+# Optimizer and training loop settings.
+learning_rate: 0.001
+weight_decay: 0.0
+epochs: 100
+patience: 20
+device: cuda
+save_model:   # Path to save the trained model. Leave empty to skip saving.
+
+# Auxiliary loss settings.
+# Contrastive and diversity losses are active by default for SuGAr-style
+# training. IRM is off by default because it only makes sense when a run has
+# meaningful environment partitions. It is only applied when lambda_irm > 0.0
+# and num_envs > 1.
+lambda_contrast: 1.0
+lambda_diversity: 1.0
+lambda_irm: 0.0
+num_envs: 1
+contrast_temperature: 0.5
+contrast_sampling: mul
+track_roc_auc: true
+
+# Post-training greedy view selection
+# Only meaningful when num_views > 1.
+greedy_model_selection: true
+aggregation_mode: mean
 
 # Smoke-mode inline records grouped by split.
 # For smoke mode, comment out raw_path above, set dataset/processed_dir back to
@@ -149,15 +229,6 @@ follow_batch:
 #       label: 0
 #       environment: debug_test
 
-# Future model/training options will eventually live in this same config, but
-# are not read by the current preprocessing code yet.
-#
-# model:
-#   fragment_encoder: gin
-#   invariant_atom_classifier: gin
-# selection:
-#   method: top_ratio
-#   ratio: 0.5
-# sugar:
-#   num_base_models: 3
-#   aggregation: mean
+
+
+# weight_averaging: false

@@ -1,12 +1,117 @@
 split,split_index,molecule_id,smiles,label,error,record_json
 train,59,647,n1c(csc1\[NH]=C(\N)N)c1ccccc1,1,RDKit could not parse SMILES: 'n1c(csc1\\[NH]=C(\\N)N)c1ccccc1',"{""name"": ""16"", ""num"": ""647"", ""p_np"": ""1"", ""smiles"": ""n1c(csc1\\[NH]=C(\\N)N)c1ccccc1""}"
+train,180,875,CCC(=O)OC1CC(=O)OC(C)C\C=C\C=C/C(O)C(C)CC(CC=O)C(O[C@@H]2O[C@H](C)[C@@H](O[C@H]3C[C@@](C)(O)[C@H](OC(=O)CC)[C@@H](C)O3)[C@@H]([C@H]2O)N(C)C)C1OC,0,"Pre-condition Violation
+	neither end atom traversed
+	Violation occurred on line 366 in file Code\GraphMol\Canon.cpp
+	Failed Expression: atomVisitOrders[dblBond->getBeginAtomIdx()] > 0 || atomVisitOrders[dblBond->getEndAtomIdx()] > 0
+	RDKIT: 2026.03.3
+	BOOST: 1_85
+","{""name"": ""midecamycin"", ""num"": ""875"", ""p_np"": ""0"", ""smiles"": ""CCC(=O)OC1CC(=O)OC(C)C\\C=C\\C=C/C(O)C(C)CC(CC=O)C(O[C@@H]2O[C@H](C)[C@@H](O[C@H]3C[C@@](C)(O)[C@H](OC(=O)CC)[C@@H](C)O3)[C@@H]([C@H]2O)N(C)C)C1OC""}"
+train,187,828,CCC(C)[C@H]1O[C@]2(CC[C@@H]1C)CC3C[C@@H](C\C=C(C)\[C@@H](O[C@H]4C[C@H](OC)[C@@H](OC5C[C@H](OC)[C@@H](O)[C@H](C)O5)[C@H](C)O4)[C@@H](C)/C=C/C=C/6CO[C@@H]7[C@H](O)C(=C[C@@H](C(=O)O3)[C@]67O)C)O2.CO[C@H]8CC(O[C@@H](C)[C@@H]8O)O[C@H]9[C@H](C)O[C@H](C[C@@H]9OC)O[C@H]/%10[C@@H](C)/C=C/C=C/%11CO[C@@H]%12[C@H](O)C(=C[C@@H](C(=O)OC%13C[C@@H](C\C=C%10C)O[C@@]%14(CC[C@H](C)[C@H](O%14)C(C)C)C%13)[C@]%11%12O)C,0,"Pre-condition Violation
+	neither end atom traversed
+	Violation occurred on line 366 in file Code\GraphMol\Canon.cpp
+	Failed Expression: atomVisitOrders[dblBond->getBeginAtomIdx()] > 0 || atomVisitOrders[dblBond->getEndAtomIdx()] > 0
+	RDKIT: 2026.03.3
+	BOOST: 1_85
+","{""name"": ""eqvalan"", ""num"": ""828"", ""p_np"": ""0"", ""smiles"": ""CCC(C)[C@H]1O[C@]2(CC[C@@H]1C)CC3C[C@@H](C\\C=C(C)\\[C@@H](O[C@H]4C[C@H](OC)[C@@H](OC5C[C@H](OC)[C@@H](O)[C@H](C)O5)[C@H](C)O4)[C@@H](C)/C=C/C=C/6CO[C@@H]7[C@H](O)C(=C[C@@H](C(=O)O3)[C@]67O)C)O2.CO[C@H]8CC(O[C@@H](C)[C@@H]8O)O[C@H]9[C@H](C)O[C@H](C[C@@H]9OC)O[C@H]/%10[C@@H](C)/C=C/C=C/%11CO[C@@H]%12[C@H](O)C(=C[C@@H](C(=O)OC%13C[C@@H](C\\C=C%10C)O[C@@]%14(CC[C@H](C)[C@H](O%14)C(C)C)C%13)[C@]%11%12O)C""}"
 train,243,650,n1c(csc1\[NH]=C(\N)N)c1cccc(c1)N\C(NC)=[NH]\C#N,0,RDKit could not parse SMILES: 'n1c(csc1\\[NH]=C(\\N)N)c1cccc(c1)N\\C(NC)=[NH]\\C#N',"{""name"": ""19"", ""num"": ""650"", ""p_np"": ""0"", ""smiles"": ""n1c(csc1\\[NH]=C(\\N)N)c1cccc(c1)N\\C(NC)=[NH]\\C#N""}"
+train,266,916,CO[C@H]1/C=C/O[C@@]2(C)Oc3c(C)c(O)c4c(O)c(NC(=O)C(=C\C=C\[C@H](C)[C@H](O)[C@@H](C)[C@@H](O)[C@@H](C)[C@H](OC(C)=O)[C@@H]1C)/C)c5n6ccc(C)cc6nc5c4c3C2=O,0,"Pre-condition Violation
+	neither end atom traversed
+	Violation occurred on line 366 in file Code\GraphMol\Canon.cpp
+	Failed Expression: atomVisitOrders[dblBond->getBeginAtomIdx()] > 0 || atomVisitOrders[dblBond->getEndAtomIdx()] > 0
+	RDKIT: 2026.03.3
+	BOOST: 1_85
+","{""name"": ""rifaximin"", ""num"": ""916"", ""p_np"": ""0"", ""smiles"": ""CO[C@H]1/C=C/O[C@@]2(C)Oc3c(C)c(O)c4c(O)c(NC(=O)C(=C\\C=C\\[C@H](C)[C@H](O)[C@@H](C)[C@@H](O)[C@@H](C)[C@H](OC(C)=O)[C@@H]1C)/C)c5n6ccc(C)cc6nc5c4c3C2=O""}"
+train,338,856,CO[C@H]1[C@@H](CC(=O)O[C@H](C)C/C=C/C=C/[C@H](O)[C@H](C)C[C@H](CC=O)[C@@H]1O[C@@H]2O[C@H](C)[C@@H](O[C@H]3C[C@@](C)(O)[C@@H](OC(=O)CC(C)C)[C@H](C)O3)[C@@H]([C@H]2O)N(C)C)OC(C)=O,0,"Pre-condition Violation
+	neither end atom traversed
+	Violation occurred on line 366 in file Code\GraphMol\Canon.cpp
+	Failed Expression: atomVisitOrders[dblBond->getBeginAtomIdx()] > 0 || atomVisitOrders[dblBond->getEndAtomIdx()] > 0
+	RDKIT: 2026.03.3
+	BOOST: 1_85
+","{""name"": ""josamycin"", ""num"": ""856"", ""p_np"": ""0"", ""smiles"": ""CO[C@H]1[C@@H](CC(=O)O[C@H](C)C/C=C/C=C/[C@H](O)[C@H](C)C[C@H](CC=O)[C@@H]1O[C@@H]2O[C@H](C)[C@@H](O[C@H]3C[C@@](C)(O)[C@@H](OC(=O)CC(C)C)[C@H](C)O3)[C@@H]([C@H]2O)N(C)C)OC(C)=O""}"
 train,643,687,c1(cc(N\C(=[NH]\c2cccc(c2)CC)C)ccc1)CC,1,RDKit could not parse SMILES: 'c1(cc(N\\C(=[NH]\\c2cccc(c2)CC)C)ccc1)CC',"{""name"": ""9-C17"", ""num"": ""687"", ""p_np"": ""1"", ""smiles"": ""c1(cc(N\\C(=[NH]\\c2cccc(c2)CC)C)ccc1)CC""}"
+train,749,924,CC1C2CC(OC(C)=O)\C=C\C(=C\CC(O)/C=C/C(=C/C(NC(=O)C(C)=O)C(C)(C(=O)O2)C1=O)C)C,0,"Pre-condition Violation
+	neither end atom traversed
+	Violation occurred on line 366 in file Code\GraphMol\Canon.cpp
+	Failed Expression: atomVisitOrders[dblBond->getBeginAtomIdx()] > 0 || atomVisitOrders[dblBond->getEndAtomIdx()] > 0
+	RDKIT: 2026.03.3
+	BOOST: 1_85
+","{""name"": ""sedecamycin"", ""num"": ""924"", ""p_np"": ""0"", ""smiles"": ""CC1C2CC(OC(C)=O)\\C=C\\C(=C\\CC(O)/C=C/C(=C/C(NC(=O)C(C)=O)C(C)(C(=O)O2)C1=O)C)C""}"
+train,802,911,CCN(CC)c1sc2c3NC(=O)C(=C\C=C\[C@H](C)[C@H](O)[C@@H](C)[C@@H](O)[C@@H](C)[C@H](OC(C)=O)[C@H](C)[C@@H](OC)/C=C/O[C@@]4(C)Oc5c(C)c(O)c(c3O)c(c2n1)c5C4=O)/C,0,"Pre-condition Violation
+	neither end atom traversed
+	Violation occurred on line 366 in file Code\GraphMol\Canon.cpp
+	Failed Expression: atomVisitOrders[dblBond->getBeginAtomIdx()] > 0 || atomVisitOrders[dblBond->getEndAtomIdx()] > 0
+	RDKIT: 2026.03.3
+	BOOST: 1_85
+","{""name"": ""rifamexil"", ""num"": ""911"", ""p_np"": ""0"", ""smiles"": ""CCN(CC)c1sc2c3NC(=O)C(=C\\C=C\\[C@H](C)[C@H](O)[C@@H](C)[C@@H](O)[C@@H](C)[C@H](OC(C)=O)[C@H](C)[C@@H](OC)/C=C/O[C@@]4(C)Oc5c(C)c(O)c(c3O)c(c2n1)c5C4=O)/C""}"
 train,865,651,s1cc(nc1\[NH]=C(\N)N)C,1,RDKit could not parse SMILES: 's1cc(nc1\\[NH]=C(\\N)N)C',"{""name"": ""2"", ""num"": ""651"", ""p_np"": ""1"", ""smiles"": ""s1cc(nc1\\[NH]=C(\\N)N)C""}"
+train,918,825,CCC(C(=O)NC\C=C\C=C(/C)C(OC)C(C)C1OC(\C=C\C=C\C=C(/C)C(=O)C2=C(O)N(C)C=CC2=O)C(O)C1O)C3(O)OC(\C=C\C=C\C)C(C)(C)C(OC4OC(C)C(OC5OC(C)C(OC)C(O)C5OC)C(OC)C4O)C3O,0,"Pre-condition Violation
+	neither end atom traversed
+	Violation occurred on line 366 in file Code\GraphMol\Canon.cpp
+	Failed Expression: atomVisitOrders[dblBond->getBeginAtomIdx()] > 0 || atomVisitOrders[dblBond->getEndAtomIdx()] > 0
+	RDKIT: 2026.03.3
+	BOOST: 1_85
+","{""name"": ""efrotomycin"", ""num"": ""825"", ""p_np"": ""0"", ""smiles"": ""CCC(C(=O)NC\\C=C\\C=C(/C)C(OC)C(C)C1OC(\\C=C\\C=C\\C=C(/C)C(=O)C2=C(O)N(C)C=CC2=O)C(O)C1O)C3(O)OC(\\C=C\\C=C\\C)C(C)(C)C(OC4OC(C)C(OC5OC(C)C(OC)C(O)C5OC)C(OC)C4O)C3O""}"
 train,966,62,c1(nc(NC(N)=[NH2])sc1)CSCCNC(=[NH]C#N)NC,1,RDKit could not parse SMILES: 'c1(nc(NC(N)=[NH2])sc1)CSCCNC(=[NH]C#N)NC',"{""name"": ""22767"", ""num"": ""62"", ""p_np"": ""1"", ""smiles"": ""c1(nc(NC(N)=[NH2])sc1)CSCCNC(=[NH]C#N)NC""}"
+train,976,946,CC(C)C1OC(=O)C2=CCCN2C(=O)c3coc(CC(=O)CC(O)\C=C(C)/C=C\CNC(=O)\C=C/C1C)n3,0,"Pre-condition Violation
+	neither end atom traversed
+	Violation occurred on line 366 in file Code\GraphMol\Canon.cpp
+	Failed Expression: atomVisitOrders[dblBond->getBeginAtomIdx()] > 0 || atomVisitOrders[dblBond->getEndAtomIdx()] > 0
+	RDKIT: 2026.03.3
+	BOOST: 1_85
+","{""name"": ""virginiamycin-factor-m1"", ""num"": ""946"", ""p_np"": ""0"", ""smiles"": ""CC(C)C1OC(=O)C2=CCCN2C(=O)c3coc(CC(=O)CC(O)\\C=C(C)/C=C\\CNC(=O)\\C=C/C1C)n3""}"
+train,994,912,CCN(CC)C(=O)COc1cc2NC(=O)C(=C\C=C\[C@H](C)[C@H](O)[C@@H](C)[C@@H](O)[C@@H](C)[C@H](OC(C)=O)[C@H](C)[C@@H](OC)/C=C/O[C@@]3(C)Oc4c(C)c(O)c(c2O)c1c4C3=O)/C,0,"Pre-condition Violation
+	neither end atom traversed
+	Violation occurred on line 366 in file Code\GraphMol\Canon.cpp
+	Failed Expression: atomVisitOrders[dblBond->getBeginAtomIdx()] > 0 || atomVisitOrders[dblBond->getEndAtomIdx()] > 0
+	RDKIT: 2026.03.3
+	BOOST: 1_85
+","{""name"": ""rifamide"", ""num"": ""912"", ""p_np"": ""0"", ""smiles"": ""CCN(CC)C(=O)COc1cc2NC(=O)C(=C\\C=C\\[C@H](C)[C@H](O)[C@@H](C)[C@@H](O)[C@@H](C)[C@H](OC(C)=O)[C@H](C)[C@@H](OC)/C=C/O[C@@]3(C)Oc4c(C)c(O)c(c2O)c1c4C3=O)/C""}"
 train,1168,648,n1c(csc1\[NH]=C(\N)N)c1cccc(c1)N,0,RDKit could not parse SMILES: 'n1c(csc1\\[NH]=C(\\N)N)c1cccc(c1)N',"{""name"": ""17"", ""num"": ""648"", ""p_np"": ""0"", ""smiles"": ""n1c(csc1\\[NH]=C(\\N)N)c1cccc(c1)N""}"
+train,1297,926,COC1C(O)CC(=O)OC(C)C\C=C\C=C\C(OC2CCC(C(C)O2)N(C)C)C(C)CC(CC=O)C1OC3OC(C)C(OC4CC(C)(O)C(O)C(C)O4)C(C3O)N(C)C,0,"Pre-condition Violation
+	neither end atom traversed
+	Violation occurred on line 366 in file Code\GraphMol\Canon.cpp
+	Failed Expression: atomVisitOrders[dblBond->getBeginAtomIdx()] > 0 || atomVisitOrders[dblBond->getEndAtomIdx()] > 0
+	RDKIT: 2026.03.3
+	BOOST: 1_85
+","{""name"": ""spiramycin"", ""num"": ""926"", ""p_np"": ""0"", ""smiles"": ""COC1C(O)CC(=O)OC(C)C\\C=C\\C=C\\C(OC2CCC(C(C)O2)N(C)C)C(C)CC(CC=O)C1OC3OC(C)C(OC4CC(C)(O)C(O)C(C)O4)C(C3O)N(C)C""}"
+train,1367,915,CO[C@H]1\C=C\O[C@@]2(C)Oc3c(C)c(O)c4C(=C(NC(=O)C(=C/C=C/[C@H](C)[C@H](O)[C@@H](C)[C@@H](O)[C@@H](C)[C@H](OC(C)=O)[C@@H]1C)\C)C(=C/NN5CCN(CC5)C6CCCC6)\C(=O)c4c3C2=O)O,0,"Pre-condition Violation
+	neither end atom traversed
+	Violation occurred on line 366 in file Code\GraphMol\Canon.cpp
+	Failed Expression: atomVisitOrders[dblBond->getBeginAtomIdx()] > 0 || atomVisitOrders[dblBond->getEndAtomIdx()] > 0
+	RDKIT: 2026.03.3
+	BOOST: 1_85
+","{""name"": ""rifapentine"", ""num"": ""915"", ""p_np"": ""0"", ""smiles"": ""CO[C@H]1\\C=C\\O[C@@]2(C)Oc3c(C)c(O)c4C(=C(NC(=O)C(=C/C=C/[C@H](C)[C@H](O)[C@@H](C)[C@@H](O)[C@@H](C)[C@H](OC(C)=O)[C@@H]1C)\\C)C(=C/NN5CCN(CC5)C6CCCC6)\\C(=O)c4c3C2=O)O""}"
 train,1541,649,n1c(csc1\[NH]=C(\N)N)c1cccc(c1)NC(C)=O,0,RDKit could not parse SMILES: 'n1c(csc1\\[NH]=C(\\N)N)c1cccc(c1)NC(C)=O',"{""name"": ""18"", ""num"": ""649"", ""p_np"": ""0"", ""smiles"": ""n1c(csc1\\[NH]=C(\\N)N)c1cccc(c1)NC(C)=O""}"
+train,1567,909,CO[C@H]1/C=C/O[C@@]2(C)Oc3c(C)c(O)c4C(=O)C(=C5NC6(CCN(CC6)CC(C)C)N=C5c4c3C2=O)NC(=O)C(=C\C=C\[C@H](C)[C@H](O)[C@@H](C)[C@@H](O)[C@@H](C)[C@H](OC(C)=O)[C@@H]1C)/C,0,"Pre-condition Violation
+	neither end atom traversed
+	Violation occurred on line 366 in file Code\GraphMol\Canon.cpp
+	Failed Expression: atomVisitOrders[dblBond->getBeginAtomIdx()] > 0 || atomVisitOrders[dblBond->getEndAtomIdx()] > 0
+	RDKIT: 2026.03.3
+	BOOST: 1_85
+","{""name"": ""rifabutin"", ""num"": ""909"", ""p_np"": ""0"", ""smiles"": ""CO[C@H]1/C=C/O[C@@]2(C)Oc3c(C)c(O)c4C(=O)C(=C5NC6(CCN(CC6)CC(C)C)N=C5c4c3C2=O)NC(=O)C(=C\\C=C\\[C@H](C)[C@H](O)[C@@H](C)[C@@H](O)[C@@H](C)[C@H](OC(C)=O)[C@@H]1C)/C""}"
 train,1577,393,Cc1nc(sc1)\[NH]=C(\N)N,1,RDKit could not parse SMILES: 'Cc1nc(sc1)\\[NH]=C(\\N)N',"{""name"": ""ICI17148"", ""num"": ""393"", ""p_np"": ""1"", ""smiles"": ""Cc1nc(sc1)\\[NH]=C(\\N)N""}"
+valid,20,350,C[C@H]1O[C@@H](O[C@@H]\2C[C@@H]3O[C@](O)(C[C@@H](O)C[C@@H](O)[C@H](O)CC[C@@H](O)C[C@@H](O)CC(=O)O[C@@H](C)[C@H](C)[C@H](O)[C@@H](C)\C=C/C=C\C=C/C=C\C=C/C=C\C=C2)C[C@H](O)[C@H]3C(O)=O)[C@@H](O)[C@@H](N)[C@@H]1O,0,"Pre-condition Violation
+	neither end atom traversed
+	Violation occurred on line 366 in file Code\GraphMol\Canon.cpp
+	Failed Expression: atomVisitOrders[dblBond->getBeginAtomIdx()] > 0 || atomVisitOrders[dblBond->getEndAtomIdx()] > 0
+	RDKIT: 2026.03.3
+	BOOST: 1_85
+","{""name"": ""AmphotericinB"", ""num"": ""350"", ""p_np"": ""0"", ""smiles"": ""C[C@H]1O[C@@H](O[C@@H]\\2C[C@@H]3O[C@](O)(C[C@@H](O)C[C@@H](O)[C@H](O)CC[C@@H](O)C[C@@H](O)CC(=O)O[C@@H](C)[C@H](C)[C@H](O)[C@@H](C)\\C=C/C=C\\C=C/C=C\\C=C/C=C\\C=C2)C[C@H](O)[C@H]3C(O)=O)[C@@H](O)[C@@H](N)[C@@H]1O""}"
 valid,76,60,O=N([O-])C1=C(CN=C1NCCSCc2ncccc2)Cc3ccccc3,1,RDKit could not parse SMILES: 'O=N([O-])C1=C(CN=C1NCCSCc2ncccc2)Cc3ccccc3',"{""name"": ""15"", ""num"": ""60"", ""p_np"": ""1"", ""smiles"": ""O=N([O-])C1=C(CN=C1NCCSCc2ncccc2)Cc3ccccc3""}"
+test,52,947,Oc1ccc(cc1)/C=C([N+]#[C-])/C(=C/c2ccc(O)cc2)[N+]#[C-],0,"Pre-condition Violation
+	neither end atom traversed
+	Violation occurred on line 366 in file Code\GraphMol\Canon.cpp
+	Failed Expression: atomVisitOrders[dblBond->getBeginAtomIdx()] > 0 || atomVisitOrders[dblBond->getEndAtomIdx()] > 0
+	RDKIT: 2026.03.3
+	BOOST: 1_85
+","{""name"": ""xantocillin"", ""num"": ""947"", ""p_np"": ""0"", ""smiles"": ""Oc1ccc(cc1)/C=C([N+]#[C-])/C(=C/c2ccc(O)cc2)[N+]#[C-]""}"
+test,60,914,CO[C@H]1/C=C/O[C@@]2(C)Oc3c(C)c(O)c4c(O)c(NC(=O)C(=C\C=C\[C@H](C)[C@H](O)[C@@H](C)[C@@H](O)[C@@H](C)[C@H](OC(C)=O)[C@@H]1C)/C)cc(O)c4c3C2=O,0,"Pre-condition Violation
+	neither end atom traversed
+	Violation occurred on line 366 in file Code\GraphMol\Canon.cpp
+	Failed Expression: atomVisitOrders[dblBond->getBeginAtomIdx()] > 0 || atomVisitOrders[dblBond->getEndAtomIdx()] > 0
+	RDKIT: 2026.03.3
+	BOOST: 1_85
+","{""name"": ""rifamycin"", ""num"": ""914"", ""p_np"": ""0"", ""smiles"": ""CO[C@H]1/C=C/O[C@@]2(C)Oc3c(C)c(O)c4c(O)c(NC(=O)C(=C\\C=C\\[C@H](C)[C@H](O)[C@@H](C)[C@@H](O)[C@@H](C)[C@H](OC(C)=O)[C@@H]1C)/C)cc(O)c4c3C2=O""}"
 test,85,644,c1c(c(ncc1)CSCCN\C(=[NH]\C#N)NCC)Br,0,RDKit could not parse SMILES: 'c1c(c(ncc1)CSCCN\\C(=[NH]\\C#N)NCC)Br',"{""name"": ""12"", ""num"": ""644"", ""p_np"": ""0"", ""smiles"": ""c1c(c(ncc1)CSCCN\\C(=[NH]\\C#N)NCC)Br""}"
 test,114,616,s1cc(CSCCN\C(NC)=[NH]\C#N)nc1\[NH]=C(\N)N,1,RDKit could not parse SMILES: 's1cc(CSCCN\\C(NC)=[NH]\\C#N)nc1\\[NH]=C(\\N)N',"{""name"": ""5-6"", ""num"": ""616"", ""p_np"": ""1"", ""smiles"": ""s1cc(CSCCN\\C(NC)=[NH]\\C#N)nc1\\[NH]=C(\\N)N""}"

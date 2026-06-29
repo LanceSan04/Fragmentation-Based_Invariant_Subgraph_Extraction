@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# Processed drugood data
+data/processed/drugood_*/
+
 # Distribution / packaging
 .Python
 build/
@@ -50,6 +53,9 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+
+# Generated DrugOOD preprocessing artifacts
+data/processed/drugood_*/
 
 # Translations
 *.mo
