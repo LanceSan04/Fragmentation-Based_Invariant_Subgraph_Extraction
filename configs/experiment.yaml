@@ -151,7 +151,7 @@ debug_molecule_details: false
 
 # PyG DataLoader settings used by --validate-loaders.
 # train loaders shuffle automatically; valid/test loaders do not.
-batch_size: 16
+batch_size: 128
 num_workers: 0
 pin_memory: false
 drop_last: false
@@ -168,20 +168,20 @@ follow_batch:
 num_classes: 2
 gnn_layers: 3
 hidden_dim: 128
-edge_ratio: 0.5
-num_views: 5
+edge_ratio: 0.25
+num_views: 10
 dropout: 0.1
 
 # Training-time random fragment-edge sampler.
 # 1.0 keeps the full fragment graph. Values below 1.0 enable SuGAr-style
 # random fragment-edge dropping during training only.
-fragment_sample_ratio: 1.0
+fragment_sample_ratio: 0.95
 sampler_seed: 7
 
 # Optimizer and training loop settings.
 learning_rate: 0.001
-weight_decay: 0.0
-epochs: 100
+weight_decay: 0.0001
+epochs: 40
 patience: 20
 device: cuda
 save_model:   # Path to save the trained model. Leave empty to skip saving.
@@ -195,7 +195,7 @@ lambda_contrast: 1.0
 lambda_diversity: 1.0
 lambda_irm: 0.0
 num_envs: 1
-contrast_temperature: 0.5
+contrast_temperature: 1
 contrast_sampling: mul
 track_roc_auc: true
 
