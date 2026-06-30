@@ -291,7 +291,7 @@ def build_reconstructed_bond_weight(
     selected_edge_weights = torch.as_tensor(selected_edge_weights, dtype=dtype, device=device)
     for bond_idx, edge_weight in zip(selected_bond_indices.tolist(), selected_edge_weights):
         match = selected_unique_bonds == int(bond_idx)
-        weights[match] = edge_weight
+        weights[match] = edge_weight + 1
     return weights
 
 
