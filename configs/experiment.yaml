@@ -186,6 +186,11 @@ patience: 20
 device: cuda
 save_model:   # Path to save the trained model. Leave empty to skip saving.
 
+# Per-epoch CSV with total loss, component losses, weighted auxiliary
+# contributions, validation metrics, and per-view validation diagnostics.
+# Leave empty to disable.
+loss_log_path: logs/sugar_training_losses.csv
+
 # Auxiliary loss settings.
 # Contrastive and diversity losses are active by default for SuGAr-style
 # training. IRM is off by default because it only makes sense when a run has

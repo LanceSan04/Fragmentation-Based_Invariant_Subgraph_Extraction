@@ -14,7 +14,10 @@ Run from the repository root with:
     .\.venv\Scripts\python.exe -m unittest tests.test_sugar_scorer -v
 """
 
+import csv
+import tempfile
 import unittest
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
@@ -162,6 +165,72 @@ class SuGArScorerTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(torch.tensor(loss)))
         self.assertGreaterEqual(accuracy, 0.0)
         self.assertLessEqual(accuracy, 1.0)
+
+    def test_trainer_writes_epoch_loss_component_log_and_uses_auc_selection(self):
+        torch.manual_seed(19)
+        data_list = [
+            self.build_data("CCOC(=O)C", 0),
+            self.build_data("CCN(CC)CC", 0),
+            self.build_data("CCCOC(=O)C", 1),
+            self.build_data("CCCN(CC)CC", 1),
+        ]
+        loader = DataLoader(
+            data_list,
+            batch_size=4,
+            shuffle=False,
+            follow_batch=["fragment_x_static"],
+        )
+        batch = next(iter(loader))
+        views = [self._make_view(batch) for _ in range(2)]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "loss_components.csv"
+            trainer = SuGARTrainer(
+                views,
+                learning_rate=1e-3,
+                lambda_contrast=1.0,
+                lambda_diversity=1.0,
+                lambda_irm=0.0,
+                contrast_sampling="mul",
+                track_roc_auc=True,
+                loss_log_path=log_path,
+            )
+            history = trainer.train(loader, val_loader=loader, num_epochs=1, patience=1)
+
+            self.assertTrue(log_path.exists())
+            with log_path.open(newline="") as log_file:
+                rows = list(csv.DictReader(log_file))
+
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            for column in (
+                "train_prediction_loss",
+                "train_contrastive_loss",
+                "train_contrastive_loss_weighted",
+                "train_diversity_loss",
+                "train_diversity_loss_weighted",
+                "train_irm_loss",
+                "train_irm_loss_weighted",
+                "val_prediction_loss",
+                "val_contrastive_loss",
+                "val_contrastive_loss_weighted",
+                "val_diversity_loss",
+                "val_diversity_loss_weighted",
+                "val_irm_loss",
+                "val_irm_loss_weighted",
+                "val_acc",
+                "val_auc",
+                "val_selection_metric",
+                "val_selection_metric_name",
+                "val_acc_per_view",
+                "val_auc_per_view",
+            ):
+                self.assertIn(column, row)
+                self.assertNotEqual(row[column], "")
+
+            self.assertIn("train_prediction_loss", history)
+            self.assertIn("val_prediction_loss", history)
+            self.assertEqual(history["val_selection_metric_name"], ["auc"])
 
     def test_trainer_irm_requires_multiple_environments(self):
         """IRM activates only when lambda_irm > 0 AND num_envs > 1."""

@@ -8,8 +8,10 @@ Run this file from the repository root with:
 import argparse
 import unittest
 
+import torch
+
 from src.data.config_hash import preprocessing_config_hash
-from train_sugar import merge_config_and_cli
+from train_sugar import Config, build_shared_initialized_views, merge_config_and_cli
 
 
 class TrainConfigTests(unittest.TestCase):
@@ -101,6 +103,40 @@ class TrainConfigTests(unittest.TestCase):
         self.assertEqual(
             preprocessing_config_hash(base),
             preprocessing_config_hash(changed_selection),
+        )
+
+    def test_fragment_ciga_views_share_initial_weights_but_have_distinct_sampler_seeds(self):
+        torch.manual_seed(123)
+        config = Config(
+            {
+                "num_views": 3,
+                "num_classes": 2,
+                "gnn_layers": 1,
+                "hidden_dim": 16,
+                "edge_ratio": 0.25,
+                "dropout": 0.0,
+                "fragment_sample_ratio": 0.95,
+                "sampler_seed": 7,
+            }
+        )
+
+        views = build_shared_initialized_views(
+            config,
+            atom_feat_dim=133,
+            fragment_feat_dim=149,
+            atom_edge_dim=14,
+            fragment_edge_dim=14,
+        )
+
+        self.assertEqual(len(views), 3)
+        first_state = views[0].state_dict()
+        for view in views[1:]:
+            for key, value in first_state.items():
+                self.assertTrue(torch.equal(value, view.state_dict()[key]), key)
+
+        self.assertEqual(
+            [view.fragment_edge_sampler.seed for view in views],
+            [7, 8, 9],
         )
 
 

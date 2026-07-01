@@ -1,6 +1,8 @@
-"""Training pipeline for SuGAR ensemble with multi-view fragment learning."""
+"""Training pipeline for SuGAR multi-view FragmentCIGA learning."""
 
+import csv
 from copy import deepcopy
+from pathlib import Path
 
 import torch
 from torch.optim import Adam
@@ -11,16 +13,19 @@ from src.losses.supervised_contrastive import supervised_contrastive_loss
 from src.losses.diversity import pairwise_diversity_loss
 from src.losses.irm import invariant_risk_loss
 
+try:
+    from sklearn.metrics import roc_auc_score as _sklearn_roc_auc
+    _SKLEARN_AVAILABLE = True
+except ImportError:
+    _SKLEARN_AVAILABLE = False
+
 
 class SuGARTrainer:
     """Trainer for a list of FragmentCIGA views forming the SuGAR ensemble.
 
-    Each view is trained independently: its masker identifies fragment edges that
-    form an invariant subgraph, reconstruction extracts that atom-level subgraph,
-    and its classifier is trained on those atoms. Auxiliary losses (contrastive,
-    diversity, IRM) encourage the views to attend to complementary substructures.
-
-    After training, wrap the views in SuGAREnsemble for inference-time aggregation.
+    Each FragmentCIGA view learns its own fragment-edge scorer and atom-level
+    classifier. After training, the trained views are wrapped in SuGAREnsemble
+    for shared-subgraph aggregation and soft-vote inference.
     """
 
     def __init__(
@@ -36,24 +41,25 @@ class SuGARTrainer:
         contrast_temperature=0.5,
         contrast_sampling="mul",
         track_roc_auc=True,
+        loss_log_path=None,
     ):
         """
         Args:
-            views: List of FragmentCIGA models (one per ensemble view).
+            views: List of FragmentCIGA models, one per SuGAr view.
             device: Device string ('cpu' or 'cuda').
             learning_rate: Adam learning rate, applied per-view.
             weight_decay: Adam weight decay.
-            lambda_contrast: Weight for supervised contrastive loss (0 disables).
-            lambda_diversity: Weight for pairwise diversity loss (0 disables).
-            lambda_irm: Weight for IRM penalty. Requires num_envs > 1 to activate.
+            lambda_contrast: Weight for supervised contrastive loss.
+            lambda_diversity: Weight for pairwise diversity loss.
+            lambda_irm: Weight for IRM penalty. Requires num_envs > 1.
             num_envs: Number of environment partitions for IRM.
             contrast_temperature: Temperature for contrastive loss.
             contrast_sampling: Contrastive sampling mode ('mul', 'var', 'cnc').
-            track_roc_auc: Whether to track ROC-AUC during per-view evaluation.
+            track_roc_auc: If True, use ROC-AUC where available.
+            loss_log_path: Optional CSV path for per-epoch diagnostics.
         """
         self.views = [v.to(device) for v in views]
         self.device = device
-        # One optimizer per view — mirrors SuGAr/main.py
         self.optimizers = [
             Adam(v.parameters(), lr=learning_rate, weight_decay=weight_decay)
             for v in self.views
@@ -64,235 +70,482 @@ class SuGARTrainer:
         self.num_envs = num_envs
         self.contrast_temperature = contrast_temperature
         self.contrast_sampling = contrast_sampling
-        self.track_roc_auc = track_roc_auc
+        self.track_roc_auc = track_roc_auc and _SKLEARN_AVAILABLE
+        self.loss_log_path = Path(loss_log_path) if loss_log_path else None
+        if track_roc_auc and not _SKLEARN_AVAILABLE:
+            print("Warning: scikit-learn not found; ROC-AUC tracking disabled.")
+
+    @staticmethod
+    def loss_component_keys():
+        """Return epoch-level loss component names tracked for diagnostics."""
+        return (
+            "prediction_loss",
+            "contrastive_loss",
+            "contrastive_loss_weighted",
+            "diversity_loss",
+            "diversity_loss_weighted",
+            "irm_loss",
+        )
 
     def uses_irm(self):
+        """Return whether the IRM penalty should participate in training."""
         return self.lambda_irm > 0 and self.num_envs > 1
 
-    def train_epoch(self, train_loader):
-        """Train all views for one epoch.
+    def _empty_components(self, device):
+        zero = torch.zeros((), device=device)
+        return {key: zero for key in self.loss_component_keys()}
 
-        Each view runs its own masker → reconstruction → classifier forward pass.
-        Per-view prediction losses are summed; auxiliary losses are added on top.
-        One backward pass updates all views jointly.
+    def _compute_components(self, per_view, labels, batch_env=None):
+        """Compute total loss plus named components from per-view outputs."""
+        components = self._empty_components(labels.device)
 
-        Returns:
-            avg_loss: Average total loss for the epoch.
-            accuracy: Training accuracy (averaged per-view softmax probs).
-        """
-        for v in self.views:
-            v.train()
+        per_view_losses = [
+            prediction_loss(pv["predictions"], labels)
+            for pv in per_view
+        ]
+        components["prediction_loss"] = torch.stack(per_view_losses).sum()
 
-        total_loss = 0
+        if self.lambda_contrast > 0:
+            all_emb = torch.cat([pv["embeddings"] for pv in per_view], dim=0)
+            all_labels = labels.repeat(len(self.views))
+            if self.contrast_sampling.lower() == "cnc":
+                y_pred = torch.cat(
+                    [pv["logits"].detach().argmax(dim=-1) for pv in per_view],
+                    dim=0,
+                )
+            else:
+                y_pred = None
+            contrastive = supervised_contrastive_loss(
+                all_emb,
+                all_labels,
+                temperature=self.contrast_temperature,
+                sampling=self.contrast_sampling,
+                y_pred=y_pred,
+            )
+            components["contrastive_loss"] = contrastive
+            components["contrastive_loss_weighted"] = self.lambda_contrast * contrastive
+
+        if self.lambda_diversity > 0 and len(self.views) > 1:
+            diversity = pairwise_diversity_loss(
+                [pv["fragment_scores"] for pv in per_view]
+            )
+            components["diversity_loss"] = diversity
+            components["diversity_loss_weighted"] = self.lambda_diversity * diversity
+
+        if batch_env is not None:
+            irm_terms = [
+                invariant_risk_loss(pv["logits"], labels, batch_env)
+                for pv in per_view
+            ]
+            if irm_terms:
+                irm = torch.stack(irm_terms).mean()
+                components["irm_loss"] = irm
+                components["irm_loss_weighted"] = self.lambda_irm * irm
+
+        total = (
+            components["prediction_loss"]
+            + components["contrastive_loss_weighted"]
+            + components["diversity_loss_weighted"]
+            + components["irm_loss_weighted"]
+        )
+        return total, components
+
+    def _average_components(self, component_totals, num_batches):
+        return {
+            key: value / num_batches if num_batches else 0.0
+            for key, value in component_totals.items()
+        }
+
+    def _roc_auc_from_chunks(self, prob_chunks, label_chunks):
+        if not self.track_roc_auc or not prob_chunks:
+            return None
+        all_probs = torch.cat(prob_chunks, dim=0).numpy()
+        all_labels = torch.cat(label_chunks, dim=0).numpy()
+        num_classes = all_probs.shape[1]
+        try:
+            if num_classes == 2:
+                return _sklearn_roc_auc(all_labels, all_probs[:, 1])
+            return _sklearn_roc_auc(
+                all_labels,
+                all_probs,
+                multi_class="ovr",
+                average="macro",
+            )
+        except ValueError:
+            return None
+
+    def _metric_for_selection(self, accuracy, roc_auc):
+        if self.track_roc_auc and roc_auc is not None:
+            return roc_auc, "auc"
+        return accuracy, "acc"
+
+    def _make_env_idx(self, loader):
+        if not self.uses_irm():
+            return None
+        return (torch.sigmoid(torch.randn(len(loader.dataset))) > 0.5).long()
+
+    def _labels_from_batch(self, batch):
+        labels = batch.y
+        if labels.dim() == 2:
+            labels = labels.squeeze(-1)
+        return labels.long()
+
+    def _forward_views(self, batch, use_aux):
+        per_view = []
+        for view in self.views:
+            if use_aux:
+                pred, interm = view(batch, return_intermediates=True)
+                per_view.append({"predictions": pred, **interm})
+            else:
+                pred = view(batch)
+                per_view.append({"predictions": pred})
+        return per_view
+
+    def train_epoch(self, train_loader, return_loss_components=False):
+        """Train all FragmentCIGA views for one epoch."""
+        for view in self.views:
+            view.train()
+
+        total_loss = 0.0
+        component_totals = {key: 0.0 for key in self.loss_component_keys()}
         correct = 0
         total = 0
         num_batches = 0
 
         use_irm = self.uses_irm()
         use_aux = self.lambda_contrast > 0 or self.lambda_diversity > 0 or use_irm
-
-        if use_irm:
-            dataset_size = len(train_loader.dataset)
-            env_idx = (torch.sigmoid(torch.randn(dataset_size)) > 0.5).long()
-        else:
-            env_idx = None
+        env_idx = self._make_env_idx(train_loader)
 
         pbar = tqdm(train_loader, desc="Training")
         for step, batch in enumerate(pbar):
             batch = batch.to(self.device)
+            labels = self._labels_from_batch(batch)
+            per_view = self._forward_views(batch, use_aux)
 
-            labels = batch.y
-            if labels.dim() == 2:
-                labels = labels.squeeze(-1)
-            labels = labels.long()
+            batch_env = None
+            if use_irm:
+                batch_size = labels.size(0)
+                start = step * train_loader.batch_size
+                batch_env = env_idx[start: start + batch_size].to(self.device)
 
-            # Per-view forward — each view runs its own masker → reconstruct → classify
-            per_view = []
-            for view in self.views:
-                if use_aux:
-                    pred, interm = view(batch, return_intermediates=True)
-                    per_view.append({"predictions": pred, **interm})
-                else:
-                    pred = view(batch)
-                    per_view.append({"predictions": pred})
+            loss, components = self._compute_components(per_view, labels, batch_env)
 
-            # Sum per-view prediction losses (mirrors SuGAr/main.py total_loss = sum(batch_losses))
-            per_view_losses = [prediction_loss(pv["predictions"], labels) for pv in per_view]
-            loss = torch.stack(per_view_losses).sum()
-
-            if use_aux:
-                # Supervised contrastive over pooled per-view embeddings
-                if self.lambda_contrast > 0:
-                    all_emb = torch.cat([pv["embeddings"] for pv in per_view], dim=0)
-                    all_labels = labels.repeat(len(self.views))
-                    if self.contrast_sampling.lower() == "cnc":
-                        y_pred = torch.cat(
-                            [pv["logits"].detach().argmax(dim=-1) for pv in per_view],
-                            dim=0,
-                        )
-                    else:
-                        y_pred = None
-                    loss = loss + self.lambda_contrast * supervised_contrastive_loss(
-                        all_emb,
-                        all_labels,
-                        temperature=self.contrast_temperature,
-                        sampling=self.contrast_sampling,
-                        y_pred=y_pred,
-                    )
-
-                # Pairwise diversity over aligned fragment-edge score vectors
-                if self.lambda_diversity > 0 and len(self.views) > 1:
-                    loss = loss + self.lambda_diversity * pairwise_diversity_loss(
-                        [pv["fragment_scores"] for pv in per_view]
-                    )
-
-                # IRM penalty applied per-view, averaged
-                if use_irm:
-                    batch_size = labels.size(0)
-                    start = step * train_loader.batch_size
-                    batch_env = env_idx[start: start + batch_size].to(self.device)
-                    irm_terms = [
-                        invariant_risk_loss(pv["logits"], labels, batch_env)
-                        for pv in per_view
-                    ]
-                    loss = loss + self.lambda_irm * torch.stack(irm_terms).mean()
-
-            # One backward pass through all views; each optimizer steps independently
             for opt in self.optimizers:
                 opt.zero_grad()
             loss.backward()
-            for v in self.views:
-                torch.nn.utils.clip_grad_norm_(v.parameters(), max_norm=1.0)
+            for view in self.views:
+                torch.nn.utils.clip_grad_norm_(view.parameters(), max_norm=1.0)
             for opt in self.optimizers:
                 opt.step()
 
-            total_loss += loss.item()
+            total_loss += float(loss.detach().item())
+            for key, value in components.items():
+                component_totals[key] += float(value.detach().item())
             num_batches += 1
 
-            # Accuracy: average per-view softmax probs → argmax
             avg_probs = torch.stack(
-                [pv["predictions"].exp() for pv in per_view], dim=0
+                [pv["predictions"].exp() for pv in per_view],
+                dim=0,
             ).mean(dim=0)
             pred_labels = avg_probs.argmax(dim=-1)
             correct += (pred_labels == labels).sum().item()
             total += labels.size(0)
 
-            current_acc = correct / total if total > 0 else 0.0
-            pbar.set_postfix({"loss": f"{loss.item():.4f}", "acc": f"{current_acc:.4f}"})
+            current_acc = correct / total if total else 0.0
+            pbar.set_postfix(
+                {
+                    "loss": f"{loss.detach().item():.4f}",
+                    "pred": f"{components['prediction_loss'].detach().item():.4f}",
+                    "acc": f"{current_acc:.4f}",
+                }
+            )
 
-        return total_loss / num_batches, correct / total if total > 0 else 0.0
+        avg_loss = total_loss / num_batches if num_batches else 0.0
+        accuracy = correct / total if total else 0.0
+        avg_components = self._average_components(component_totals, num_batches)
+        if return_loss_components:
+            return avg_loss, accuracy, avg_components
+        return avg_loss, accuracy
 
     @torch.no_grad()
     def evaluate_single_view(self, eval_loader, view_idx):
-        """Evaluate one view independently (its masker → its reconstruction → its classifier).
-
-        Args:
-            eval_loader: DataLoader with batches of MoleculeData.
-            view_idx: Index into self.views.
-
-        Returns:
-            accuracy: Classification accuracy for this view.
-        """
+        """Evaluate one FragmentCIGA view independently."""
         view = self.views[view_idx]
         view.eval()
+
+        total_loss = 0.0
         correct = 0
         total = 0
+        num_batches = 0
+        prob_chunks = [] if self.track_roc_auc else None
+        label_chunks = [] if self.track_roc_auc else None
 
         for batch in eval_loader:
             batch = batch.to(self.device)
+            labels = self._labels_from_batch(batch)
             predictions = view(batch)
-            labels = batch.y
-            if labels.dim() == 2:
-                labels = labels.squeeze(-1)
-            labels = labels.long()
+            total_loss += float(prediction_loss(predictions, labels).item())
             correct += (predictions.argmax(dim=-1) == labels).sum().item()
             total += labels.size(0)
+            num_batches += 1
+            if self.track_roc_auc:
+                prob_chunks.append(predictions.exp().cpu())
+                label_chunks.append(labels.cpu())
 
-        return correct / total if total > 0 else 0.0
+        accuracy = correct / total if total else 0.0
+        roc_auc = self._roc_auc_from_chunks(prob_chunks, label_chunks)
+        avg_loss = total_loss / num_batches if num_batches else 0.0
+        return {"loss": avg_loss, "acc": accuracy, "auc": roc_auc}
+
+    def evaluate_views(self, eval_loader, return_loss_components=False):
+        """Evaluate all views together with probability averaging.
+
+        This mirrors the training-time multi-view prediction average and gives
+        validation diagnostics before the final SuGAREnsemble wrapper is built.
+        """
+        for view in self.views:
+            view.eval()
+
+        use_irm = self.uses_irm()
+        use_aux = self.lambda_contrast > 0 or self.lambda_diversity > 0 or use_irm
+        env_idx = self._make_env_idx(eval_loader)
+
+        total_loss = 0.0
+        component_totals = {key: 0.0 for key in self.loss_component_keys()}
+        correct = 0
+        total = 0
+        num_batches = 0
+        prob_chunks = [] if self.track_roc_auc else None
+        label_chunks = [] if self.track_roc_auc else None
+
+        for step, batch in enumerate(eval_loader):
+            batch = batch.to(self.device)
+            labels = self._labels_from_batch(batch)
+
+            with torch.set_grad_enabled(use_irm):
+                per_view = self._forward_views(batch, use_aux)
+                batch_env = None
+                if use_irm:
+                    batch_size = labels.size(0)
+                    start = step * eval_loader.batch_size
+                    batch_env = env_idx[start: start + batch_size].to(self.device)
+                loss, components = self._compute_components(per_view, labels, batch_env)
+
+            avg_probs = torch.stack(
+                [pv["predictions"].detach().exp() for pv in per_view],
+                dim=0,
+            ).mean(dim=0)
+            pred_labels = avg_probs.argmax(dim=-1)
+            correct += (pred_labels == labels).sum().item()
+            total += labels.size(0)
+
+            total_loss += float(loss.detach().item())
+            for key, value in components.items():
+                component_totals[key] += float(value.detach().item())
+            num_batches += 1
+
+            if self.track_roc_auc:
+                prob_chunks.append(avg_probs.cpu())
+                label_chunks.append(labels.detach().cpu())
+
+        avg_loss = total_loss / num_batches if num_batches else 0.0
+        accuracy = correct / total if total else 0.0
+        roc_auc = self._roc_auc_from_chunks(prob_chunks, label_chunks)
+        avg_components = self._average_components(component_totals, num_batches)
+        if return_loss_components:
+            return avg_loss, accuracy, roc_auc, avg_components
+        return avg_loss, accuracy, roc_auc
+
+    def _loss_log_fieldnames(self):
+        return (
+            "epoch",
+            "train_loss",
+            "train_prediction_loss",
+            "train_contrastive_loss",
+            "train_contrastive_loss_weighted",
+            "train_diversity_loss",
+            "train_diversity_loss_weighted",
+            "train_irm_loss",
+            "train_irm_loss_weighted",
+            "train_acc",
+            "val_loss",
+            "val_prediction_loss",
+            "val_contrastive_loss",
+            "val_contrastive_loss_weighted",
+            "val_diversity_loss",
+            "val_diversity_loss_weighted",
+            "val_irm_loss",
+            "val_irm_loss_weighted",
+            "val_acc",
+            "val_auc",
+            "val_selection_metric",
+            "val_selection_metric_name",
+            "val_acc_per_view",
+            "val_auc_per_view",
+        )
+
+    def _initialize_loss_log(self):
+        if self.loss_log_path is None:
+            return
+        self.loss_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.loss_log_path.open("w", newline="") as log_file:
+            writer = csv.DictWriter(log_file, fieldnames=self._loss_log_fieldnames())
+            writer.writeheader()
+        print(f"Writing per-epoch loss components to {self.loss_log_path}")
+
+    def _append_loss_log_row(self, row):
+        if self.loss_log_path is None:
+            return
+        with self.loss_log_path.open("a", newline="") as log_file:
+            writer = csv.DictWriter(log_file, fieldnames=self._loss_log_fieldnames())
+            writer.writerow(row)
 
     def train(self, train_loader, val_loader=None, num_epochs=100, patience=20, restore_best_weights=True):
-        """Full training loop with per-view best-weight tracking.
-
-        Each view's best weights are saved independently whenever that view
-        achieves a new personal best validation accuracy, mirroring SuGAr/main.py.
-        Early stopping is driven by the average per-view validation accuracy.
-
-        Args:
-            train_loader: Training DataLoader.
-            val_loader: Validation DataLoader (optional).
-            num_epochs: Maximum epochs.
-            patience: Early stopping patience (epochs without avg val acc improvement).
-            restore_best_weights: If True, restore each view's personal best
-                weights after training completes.
-
-        Returns:
-            dict: History with 'train_loss', 'train_acc', 'val_acc_per_view', 'val_acc_avg'.
-        """
+        """Full training loop with AUC-aware per-view best-weight tracking."""
         num_views = len(self.views)
         history = {
             "train_loss": [],
             "train_acc": [],
+            "val_loss": [],
+            "val_acc": [],
+            "val_auc": [],
             "val_acc_per_view": [],
-            "val_acc_avg": [],
+            "val_auc_per_view": [],
+            "val_selection_metric": [],
+            "val_selection_metric_name": [],
         }
+        for key in self.loss_component_keys():
+            history[f"train_{key}"] = []
+            history[f"val_{key}"] = []
 
-        per_view_best_val_acc = [-float("inf")] * num_views
+        per_view_best_metric = [-float("inf")] * num_views
         per_view_best_weights = [None] * num_views
-        best_avg_val_acc = -float("inf")
+        best_val_metric = -float("inf")
+        best_metric_label = "acc"
         patience_counter = 0
+        self._initialize_loss_log()
 
         for epoch in range(num_epochs):
-            train_loss, train_acc = self.train_epoch(train_loader)
+            train_loss, train_acc, train_components = self.train_epoch(
+                train_loader,
+                return_loss_components=True,
+            )
             history["train_loss"].append(train_loss)
             history["train_acc"].append(train_acc)
+            for key, value in train_components.items():
+                history[f"train_{key}"].append(value)
+
+            should_stop = False
+            val_loss = None
+            val_acc = None
+            val_auc = None
+            val_components = {key: None for key in self.loss_component_keys()}
+            view_val_accs = []
+            view_val_aucs = []
+            val_selection_metric = None
+            metric_label = best_metric_label
 
             if val_loader is not None:
-                view_val_accs = []
                 for i in range(num_views):
-                    acc = self.evaluate_single_view(val_loader, i)
-                    view_val_accs.append(acc)
-                    if acc > per_view_best_val_acc[i]:
-                        per_view_best_val_acc[i] = acc
+                    view_metrics = self.evaluate_single_view(val_loader, i)
+                    view_val_accs.append(view_metrics["acc"])
+                    view_val_aucs.append(view_metrics["auc"])
+                    view_metric, _ = self._metric_for_selection(
+                        view_metrics["acc"],
+                        view_metrics["auc"],
+                    )
+                    if view_metric > per_view_best_metric[i]:
+                        per_view_best_metric[i] = view_metric
                         per_view_best_weights[i] = deepcopy(self.views[i].state_dict())
 
-                avg_val_acc = sum(view_val_accs) / num_views
+                val_loss, val_acc, val_auc, val_components = self.evaluate_views(
+                    val_loader,
+                    return_loss_components=True,
+                )
+                val_selection_metric, metric_label = self._metric_for_selection(val_acc, val_auc)
+                best_metric_label = metric_label
+
+                history["val_loss"].append(val_loss)
+                history["val_acc"].append(val_acc)
+                history["val_auc"].append(val_auc)
                 history["val_acc_per_view"].append(view_val_accs)
-                history["val_acc_avg"].append(avg_val_acc)
+                history["val_auc_per_view"].append(view_val_aucs)
+                history["val_selection_metric"].append(val_selection_metric)
+                history["val_selection_metric_name"].append(metric_label)
+                for key, value in val_components.items():
+                    history[f"val_{key}"].append(value)
 
                 view_acc_str = "  ".join(
-                    f"v{i}={a:.4f}" for i, a in enumerate(view_val_accs)
+                    f"v{i}={acc:.4f}" for i, acc in enumerate(view_val_accs)
                 )
+                auc_str = f" | Val AUC: {val_auc:.4f}" if val_auc is not None else ""
                 print(
                     f"Epoch {epoch + 1}/{num_epochs} | "
                     f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | "
-                    f"Val Acc [{view_acc_str}] | Avg: {avg_val_acc:.4f}"
+                    f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}"
+                    f"{auc_str} | Val per-view Acc [{view_acc_str}] | "
+                    f"Selection val_{metric_label}: {val_selection_metric:.4f}"
                 )
 
-                if avg_val_acc > best_avg_val_acc:
-                    best_avg_val_acc = avg_val_acc
+                if val_selection_metric > best_val_metric:
+                    best_val_metric = val_selection_metric
                     patience_counter = 0
                 else:
                     patience_counter += 1
 
                 if patience_counter >= patience:
                     print(f"Early stopping at epoch {epoch + 1}")
-                    break
+                    should_stop = True
             else:
                 print(
                     f"Epoch {epoch + 1}/{num_epochs} | "
                     f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f}"
                 )
 
+            self._append_loss_log_row(
+                {
+                    "epoch": epoch + 1,
+                    "train_loss": train_loss,
+                    "train_prediction_loss": train_components["prediction_loss"],
+                    "train_contrastive_loss": train_components["contrastive_loss"],
+                    "train_contrastive_loss_weighted": train_components["contrastive_loss_weighted"],
+                    "train_diversity_loss": train_components["diversity_loss"],
+                    "train_diversity_loss_weighted": train_components["diversity_loss_weighted"],
+                    "train_irm_loss": train_components["irm_loss"],
+                    "train_irm_loss_weighted": train_components["irm_loss_weighted"],
+                    "train_acc": train_acc,
+                    "val_loss": val_loss,
+                    "val_prediction_loss": val_components["prediction_loss"],
+                    "val_contrastive_loss": val_components["contrastive_loss"],
+                    "val_contrastive_loss_weighted": val_components["contrastive_loss_weighted"],
+                    "val_diversity_loss": val_components["diversity_loss"],
+                    "val_diversity_loss_weighted": val_components["diversity_loss_weighted"],
+                    "val_irm_loss": val_components["irm_loss"],
+                    "val_irm_loss_weighted": val_components["irm_loss_weighted"],
+                    "val_acc": val_acc,
+                    "val_auc": val_auc,
+                    "val_selection_metric": val_selection_metric,
+                    "val_selection_metric_name": metric_label,
+                    "val_acc_per_view": "|".join(f"{v:.6f}" for v in view_val_accs),
+                    "val_auc_per_view": "|".join(
+                        "" if v is None else f"{v:.6f}" for v in view_val_aucs
+                    ),
+                }
+            )
+
+            if should_stop:
+                break
+
         if restore_best_weights:
             restored = 0
-            for i in range(num_views):
-                if per_view_best_weights[i] is not None:
-                    self.views[i].load_state_dict(per_view_best_weights[i])
+            for i, weights in enumerate(per_view_best_weights):
+                if weights is not None:
+                    self.views[i].load_state_dict(weights)
                     restored += 1
             if restored:
                 print(
                     f"Restored best per-view weights for {restored}/{num_views} views "
-                    f"(best avg val acc = {best_avg_val_acc:.4f})"
+                    f"(best val_{best_metric_label} = {best_val_metric:.4f})"
                 )
 
         return history

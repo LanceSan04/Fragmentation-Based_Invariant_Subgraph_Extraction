@@ -17,6 +17,7 @@ import torch.nn.functional as F
 import argparse
 import yaml
 from pathlib import Path
+from copy import deepcopy
 from dataclasses import dataclass
 
 try:
@@ -66,6 +67,54 @@ def build_config(args):
     """Build the effective training config from YAML defaults plus CLI overrides."""
     config_dict = load_config(args.config) if args.config else {}
     return Config(merge_config_and_cli(config_dict, args))
+
+
+def build_shared_initialized_views(
+    config,
+    atom_feat_dim,
+    fragment_feat_dim,
+    atom_edge_dim,
+    fragment_edge_dim,
+):
+    """Build FragmentCIGA views from one shared initial state."""
+    num_views = config.num_views
+    shared_view = FragmentCIGA(
+        atom_feature_dim=atom_feat_dim,
+        fragment_feature_dim=fragment_feat_dim,
+        num_classes=config.num_classes,
+        num_gnn_layers=config.gnn_layers,
+        gnn_hidden_dim=config.hidden_dim,
+        edge_ratio=config.edge_ratio,
+        dropout=config.dropout,
+        fragment_edge_dim=fragment_edge_dim,
+        atom_edge_dim=atom_edge_dim,
+        fragment_sample_ratio=config.fragment_sample_ratio,
+        sampler_seed=config.sampler_seed,
+    )
+    shared_initial_state = deepcopy(shared_view.state_dict())
+
+    views = []
+    for i in range(num_views):
+        view = FragmentCIGA(
+            atom_feature_dim=atom_feat_dim,
+            fragment_feature_dim=fragment_feat_dim,
+            num_classes=config.num_classes,
+            num_gnn_layers=config.gnn_layers,
+            gnn_hidden_dim=config.hidden_dim,
+            edge_ratio=config.edge_ratio,
+            dropout=config.dropout,
+            fragment_edge_dim=fragment_edge_dim,
+            atom_edge_dim=atom_edge_dim,
+            fragment_sample_ratio=config.fragment_sample_ratio,
+            sampler_seed=(
+                None
+                if config.sampler_seed is None
+                else int(config.sampler_seed) + i
+            ),
+        )
+        view.load_state_dict(shared_initial_state)
+        views.append(view)
+    return views
 
 
 @torch.no_grad()
@@ -175,29 +224,18 @@ def main(args):
     print(f"  Atom edge dim:        {atom_edge_dim}")
     print(f"  Fragment edge dim:    {fragment_edge_dim}")
 
-    # Create one FragmentCIGA model per view
+    # Create one FragmentCIGA model per view. All views share the same initial
+    # weights, while their sampler seeds differ so training still sees different
+    # fragment-edge drops across views.
     num_views = config.num_views
-    views = [
-        FragmentCIGA(
-            atom_feature_dim=atom_feat_dim,
-            fragment_feature_dim=fragment_feat_dim,
-            num_classes=config.num_classes,
-            num_gnn_layers=config.gnn_layers,
-            gnn_hidden_dim=config.hidden_dim,
-            edge_ratio=config.edge_ratio,
-            dropout=config.dropout,
-            fragment_edge_dim=fragment_edge_dim,
-            atom_edge_dim=atom_edge_dim,
-            fragment_sample_ratio=config.fragment_sample_ratio,
-            sampler_seed=(
-                None
-                if config.sampler_seed is None
-                else int(config.sampler_seed) + i
-            ),
-        )
-        for i in range(num_views)
-    ]
-    print(f"  Created {num_views} FragmentCIGA view(s)")
+    views = build_shared_initialized_views(
+        config,
+        atom_feat_dim,
+        fragment_feat_dim,
+        atom_edge_dim,
+        fragment_edge_dim,
+    )
+    print(f"  Created {num_views} FragmentCIGA view(s) with shared initialization")
 
     # Build trainer
     trainer = SuGARTrainer(
@@ -212,6 +250,7 @@ def main(args):
         contrast_temperature=config.contrast_temperature,
         contrast_sampling=config.contrast_sampling,
         track_roc_auc=config.track_roc_auc,
+        loss_log_path=config.get("loss_log_path", "logs/sugar_training_losses.csv"),
     )
 
     # Train — per-view best weights are tracked and restored automatically
@@ -333,6 +372,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--save_model", type=str, default=None)
+    parser.add_argument("--loss_log_path", type=str, default=None)
     parser.add_argument(
         "--track_roc_auc",
         type=lambda x: x.lower() not in ("0", "false", "no"),
