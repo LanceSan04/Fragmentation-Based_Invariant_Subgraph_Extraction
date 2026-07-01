@@ -182,28 +182,19 @@ def reconstruct_atom_graph(
         selected_attachment_atoms,
     )
 
-    directed_edges = []
-    directed_edge_attrs = []
-    directed_edge_to_bond = []
-    directed_edge_weight = []
-    for new_bond_idx, old_bond_idx in enumerate(selected_unique_bonds.tolist()):
-        src, dst = relabeled_edge_index[:, new_bond_idx].tolist()
-        attr = molecule_data.bond_attr[old_bond_idx]
-        weight = reconstructed_bond_weight[new_bond_idx]
-        directed_edges.extend([[src, dst], [dst, src]])
-        directed_edge_attrs.extend([attr, attr])
-        directed_edge_to_bond.extend([new_bond_idx, new_bond_idx])
-        directed_edge_weight.extend([weight, weight])
-
-    if directed_edges:
-        edge_index = torch.tensor(directed_edges, dtype=torch.long, device=selected_atoms.device).t().contiguous()
-        edge_attr = torch.stack(directed_edge_attrs, dim=0)
-        directed_edge_to_bond = torch.tensor(
-            directed_edge_to_bond,
-            dtype=torch.long,
-            device=selected_atoms.device,
-        )
-        edge_weight = torch.stack(directed_edge_weight, dim=0)
+    if selected_unique_bonds.numel():
+        num_bonds = selected_unique_bonds.numel()
+        src = relabeled_edge_index[0]  # [num_bonds]
+        dst = relabeled_edge_index[1]  # [num_bonds]
+        edge_index = torch.stack([
+            torch.cat([src, dst]),
+            torch.cat([dst, src]),
+        ], dim=0)
+        bond_attrs = molecule_data.bond_attr[selected_unique_bonds]
+        edge_attr = torch.cat([bond_attrs, bond_attrs], dim=0)
+        bond_range = torch.arange(num_bonds, dtype=torch.long, device=selected_atoms.device)
+        directed_edge_to_bond = torch.cat([bond_range, bond_range])
+        edge_weight = torch.cat([reconstructed_bond_weight, reconstructed_bond_weight])
     else:
         edge_index = torch.empty((2, 0), dtype=torch.long, device=selected_atoms.device)
         edge_attr = molecule_data.bond_attr.new_empty((0, molecule_data.bond_attr.size(1)))
@@ -262,15 +253,12 @@ def relabel_attachment_atoms(selected_atoms, selected_attachment_atoms):
         dtype=torch.long,
         device=selected_attachment_atoms.device,
     )
-    old_to_new = {int(old_id): new_id for new_id, old_id in enumerate(selected_atoms.tolist())}
-
-    relabeled = torch.empty_like(selected_attachment_atoms)
-    for row in range(selected_attachment_atoms.size(0)):
-        for col in range(selected_attachment_atoms.size(1)):
-            atom_id = int(selected_attachment_atoms[row, col])
-            if atom_id not in old_to_new:
-                raise ValueError("selected attachment atom is not in the reconstructed atom set")
-            relabeled[row, col] = old_to_new[atom_id]
+    max_id = int(selected_atoms.max())
+    mapping = torch.full((max_id + 1,), -1, dtype=torch.long, device=selected_attachment_atoms.device)
+    mapping[selected_atoms] = torch.arange(selected_atoms.numel(), device=selected_attachment_atoms.device)
+    relabeled = mapping[selected_attachment_atoms]
+    if (relabeled < 0).any():
+        raise ValueError("selected attachment atom is not in the reconstructed atom set")
     return relabeled
 
 
@@ -289,9 +277,9 @@ def build_reconstructed_bond_weight(
 
     selected_bond_indices = torch.as_tensor(selected_bond_indices, dtype=torch.long, device=device)
     selected_edge_weights = torch.as_tensor(selected_edge_weights, dtype=dtype, device=device)
-    for bond_idx, edge_weight in zip(selected_bond_indices.tolist(), selected_edge_weights):
-        match = selected_unique_bonds == int(bond_idx)
-        weights[match] = edge_weight + 1
+    # selected_unique_bonds is sorted (from torch.unique); searchsorted gives each bond's position
+    positions = torch.searchsorted(selected_unique_bonds, selected_bond_indices)
+    weights[positions] = selected_edge_weights + 1
     return weights
 
 

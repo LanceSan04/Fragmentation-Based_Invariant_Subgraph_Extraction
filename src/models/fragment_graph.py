@@ -36,36 +36,25 @@ def build_fragment_graph(molecule_data, fragmentation_result):
 
 
 def build_fragment_graph_batch(molecule_batch):
-    """Build a batched fragment-level graph from a batch of molecules.
-    
+    """Build a batched fragment-level graph directly from DataLoader batch tensors.
+
     Args:
         molecule_batch: PyG Batch of MoleculeData objects
-        
+
     Returns:
         Data: Batched PyG Data for fragment-level graph with batch assignment
     """
-    from torch_geometric.data import Batch
-    
-    fragment_graphs = []
-    for molecule_data in molecule_batch.to_data_list():
-        # Build fragment graph for each molecule
-        frag_graph = Data(
-            x=molecule_data.fragment_x_static,
-            edge_index=molecule_data.fragment_edge_index,
-            edge_attr=molecule_data.fragment_edge_attr,
-            y=molecule_data.y,
-        )
-        fragment_graphs.append(frag_graph)
-    
-    # Batch all fragment graphs together. The edge order produced here matches
-    # the order used by reconstruct_batch(batch, full_edge_mask), so these ids
-    # are the bridge from sampled fragment graphs back to the full molecule
-    # provenance tensors.
-    batched_frag_graph = Batch.from_data_list(fragment_graphs)
-    batched_frag_graph.full_fragment_edge_id = torch.arange(
-        batched_frag_graph.edge_index.size(1),
-        dtype=torch.long,
-        device=batched_frag_graph.edge_index.device,
+    batched = Data(
+        x=molecule_batch.fragment_x_static,
+        edge_index=molecule_batch.fragment_edge_index,
+        edge_attr=molecule_batch.fragment_edge_attr,
+        batch=molecule_batch.fragment_x_static_batch,
+        y=molecule_batch.y,
+        num_nodes=molecule_batch.fragment_x_static.size(0),
     )
-    
-    return batched_frag_graph
+    batched.full_fragment_edge_id = torch.arange(
+        batched.edge_index.size(1),
+        dtype=torch.long,
+        device=batched.edge_index.device,
+    )
+    return batched
