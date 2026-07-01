@@ -1,21 +1,23 @@
-# Unified experiment config for the implemented preprocessing pipeline.
+# Unified experiment config for preprocessing, FragmentCIGA training, and
+# SuGAREnsemble evaluation.
 #
-# Current smoke-test command:
-#   .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\experiment.yaml
-#
-# Optional loader check:
+# Current DrugOOD preprocessing command:
 #   .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\experiment.yaml --validate-loaders
+#
+# Short end-to-end training smoke command:
+#   .\.venv\Scripts\python.exe train_sugar.py --config configs\experiment.yaml --epochs 2 --patience 2 --num_views 2 --hidden_dim 32 --gnn_layers 2 --batch_size 32 --device cpu --loss_log_path logs\smoke_sugar_training_losses.csv
 #
 # This one file can be used in two modes:
 #
 # 1. Smoke mode:
-#    Keep the inline `splits:` block at the bottom. This runs without a
-#    downloaded dataset and is useful for checking preprocessing, batching,
-#    fragmentation, and reconstruction contracts.
+#    Comment out raw_path/raw_format, switch dataset/processed_dir to smoke
+#    paths, set label_key/environment_key to match the inline records, and
+#    uncomment the inline `splits:` block at the bottom. This runs without a
+#    downloaded dataset and is useful for checking preprocessing/batching.
 #
-# 2. Real dataset mode:
-#    Remove or comment out the `splits:` block, then set `dataset`, `raw_path`,
-#    `processed_dir`, and the record key names below.
+# 2. Real dataset mode, active below:
+#    Keep `raw_path`/`raw_format`, set `dataset`, `processed_dir`, field keys,
+#    and split roles. Native DrugOOD JSON preserves source split names.
 #
 #    Flat .csv/.tsv/.json/.jsonl records can be grouped by `split_key` or by
 #    deterministic `split_ratios`.
@@ -43,12 +45,12 @@ dataset: drugood_lbap_core_ec50_assay
 # saved .pt structure change in a backward-incompatible way.
 preprocess_version: "0.1.0"
 
-# Fragmentation method.
+# Fragmentation method used during preprocessing.
 # Available now:
 #   group_graph: default Group Graph-style molecular fragments.
 #   brics: RDKit BRICS fragments for ablation/comparison.
 # Future:
-#   recap: planned, not implemented yet.
+#   recap: planned/not active in the fragmenter registry yet.
 fragmentation: group_graph
 
 # Fragment/supernode feature construction.
@@ -65,11 +67,9 @@ atom_feature_dim: 133
 bond_feature_dim: 14
 fragment_feature_dim: 149
 
-# Output directory for generated .pt files.
-# preprocess.py will write:
-#   data/processed/smoke/group_graph/train.pt
-#   data/processed/smoke/group_graph/valid.pt
-#   data/processed/smoke/group_graph/test.pt
+# Output directory for generated .pt files and training input.
+# preprocess.py writes one `{split}.pt` file per selected split here.
+# train_sugar.py later loads split files from this same directory.
 #
 # Examples:
 #   processed_dir: data/processed/smoke/group_graph
@@ -83,9 +83,8 @@ processed_dir: data/processed/drugood_lbap_core_ec50_assay/group_graph
 # If omitted, preprocess.py writes preprocess_failures.csv inside processed_dir.
 failure_report_path: data/processed/drugood_lbap_core_ec50_assay/group_graph/preprocess_failures.csv
 
-# Real dataset input path.
-# Leave this commented in smoke mode because the inline `splits:` block below
-# is the data source. In real dataset mode, uncomment and set this path.
+# Real dataset input path. In smoke mode, comment raw_path/raw_format out
+# because the inline `splits:` block is the data source.
 #
 # Supported file types:
 #   .csv, .tsv, .json, .jsonl
@@ -93,8 +92,12 @@ failure_report_path: data/processed/drugood_lbap_core_ec50_assay/group_graph/pre
 raw_path: data/raw/drugood/lbap_core_ec50_assay.json
 raw_format: drugood_json
 
-# Record key names used by process_record(). These must match either the inline
-# records below or the real dataset file columns/keys.
+# Record key names used by process_record().
+# For this DrugOOD JSON:
+#   smiles:     molecular SMILES string
+#   cls_label:  binary classification label
+#   domain_id:  DrugOOD domain/environment identifier
+# Metadata keys are retained for provenance/debugging but are not model inputs.
 smiles_key: smiles
 label_key: cls_label
 environment_key: domain_id
@@ -115,9 +118,10 @@ metadata_keys:
 #   valid: 0.1
 #   test: 0.1
 
-# Split selection for training/evaluation. For BBBP ratio splits, keep
-# train/valid/test. For DrugOOD, switch these to train/ood_val/ood_test and
-# report IID splits for comparison:
+# Split selection for preprocessing, loading, training, and reporting.
+# For BBBP/random ratio splits, use train/valid/test or set loader_split_names
+# if you only want to load a subset. For DrugOOD, preserve the native split
+# names and use OOD validation/test for the main OOD protocol:
 #
 #   split_names: [train, iid_val, ood_val, iid_test, ood_test]
 #   train_split: train
@@ -149,8 +153,10 @@ debug: true
 debug_record_interval: 250
 debug_molecule_details: false
 
-# PyG DataLoader settings used by --validate-loaders.
-# train loaders shuffle automatically; valid/test loaders do not.
+# PyG DataLoader settings used by --validate-loaders and train_sugar.py.
+# The loader named by train_split shuffles automatically; all other splits do
+# not. `seed` controls deterministic DataLoader shuffling/worker seeds, not the
+# FragmentCIGA sampler seeds below.
 batch_size: 128
 num_workers: 0
 pin_memory: false
@@ -162,9 +168,11 @@ seed: 7
 follow_batch:
   - fragment_x_static
 
-# SuGAr model settings.
-# These are used by train_sugar.py. The config file provides defaults; explicit
-# CLI values override them for a single run.
+# FragmentCIGA view settings.
+# train_sugar.py builds `num_views` separate FragmentCIGA views from one shared
+# initial state, then trains them with SuGARTrainer. After training, the views
+# are wrapped in SuGAREnsemble for inference-time aggregation.
+# Explicit CLI values override YAML defaults for a single run.
 num_classes: 2
 gnn_layers: 3
 hidden_dim: 128
@@ -172,19 +180,27 @@ edge_ratio: 0.25
 num_views: 10
 dropout: 0.1
 
-# Training-time random fragment-edge sampler.
+# Training-time random fragment-edge sampler inside each FragmentCIGA view.
 # 1.0 keeps the full fragment graph. Values below 1.0 enable SuGAr-style
-# random fragment-edge dropping during training only.
+# random fragment-edge dropping during training only. Evaluation mode keeps the
+# full fragment graph. Each view gets sampler_seed + view_index so views start
+# from shared weights but see different stochastic edge drops.
 fragment_sample_ratio: 0.95
 sampler_seed: 7
 
 # Optimizer and training loop settings.
+# `device: cuda` automatically falls back to CPU when CUDA is unavailable.
 learning_rate: 0.001
 weight_decay: 0.0001
 epochs: 40
 patience: 20
 device: cuda
-save_model:   # Path to save the trained model. Leave empty to skip saving.
+
+# Optional checkpoint path. Leave empty to skip saving.
+# Current save format is `{view_index: FragmentCIGA.state_dict()}` only. It does
+# not yet include optimizer state, config snapshot, selected greedy views, or
+# training history.
+save_model:
 
 # Per-epoch CSV with total loss, component losses, weighted auxiliary
 # contributions, validation metrics, and per-view validation diagnostics.
@@ -202,16 +218,38 @@ lambda_irm: 0.0
 num_envs: 1
 contrast_temperature: 1
 contrast_sampling: mul
+
+# When true and scikit-learn is installed, validation/model selection prefers
+# ROC-AUC and falls back to accuracy if AUC is unavailable, such as a split with
+# only one class.
 track_roc_auc: true
 
-# Post-training greedy view selection
-# Only meaningful when num_views > 1.
+# Post-training ensemble behavior.
+# aggregation_mode controls SuGAREnsemble inference: each trained view scores
+# fragment edges, scores are aggregated by mean or max, one shared fragment
+# subgraph is reconstructed, then classifiers soft-vote.
+#
+# greedy_model_selection evaluates view subsets on the validation split and
+# keeps a view only if it improves validation AUC/accuracy. It is only
+# meaningful when num_views > 1.
+#
+# Caveat: current trainer validation averages independent FragmentCIGA view
+# predictions, while final SuGAREnsemble validation/test aggregates edge scores
+# into one shared subgraph. This validation-path mismatch should be addressed
+# before treating best-epoch selection as final paper-quality model selection.
 greedy_model_selection: true
 aggregation_mode: mean
 
 # Smoke-mode inline records grouped by split.
-# For smoke mode, comment out raw_path above, set dataset/processed_dir back to
-# smoke paths, and uncomment this block.
+# For smoke mode, also set:
+#   dataset: smoke
+#   processed_dir: data/processed/smoke/group_graph
+#   label_key: label
+#   environment_key: environment
+#   split_names: [train, valid, test]
+#   validation_split: valid
+#   test_split: test
+#   report_splits: []
 #
 # splits:
 #   train:
@@ -233,7 +271,7 @@ aggregation_mode: mean
 #       smiles: "[He]"
 #       label: 0
 #       environment: debug_test
-
-
-
+# Full SuGAr-style weight averaging is not implemented in the active training
+# path yet. Keep this disabled until src/models/weight_average.py is integrated
+# with checkpointing and any required BN/stat recomputation.
 # weight_averaging: false
