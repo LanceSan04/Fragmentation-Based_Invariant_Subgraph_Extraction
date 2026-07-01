@@ -149,7 +149,7 @@ class SuGARTrainer:
             + components["diversity_loss_weighted"]
             + components["irm_loss_weighted"]
         )
-        return total, components
+        return total, components, per_view_losses
 
     def _average_components(self, component_totals, num_batches):
         return {
@@ -229,7 +229,7 @@ class SuGARTrainer:
                 start = step * train_loader.batch_size
                 batch_env = env_idx[start: start + batch_size].to(self.device)
 
-            loss, components = self._compute_components(per_view, labels, batch_env)
+            loss, components, _ = self._compute_components(per_view, labels, batch_env)
 
             for opt in self.optimizers:
                 opt.zero_grad()
@@ -268,48 +268,21 @@ class SuGARTrainer:
             return avg_loss, accuracy, avg_components
         return avg_loss, accuracy
 
-    @torch.no_grad()
-    def evaluate_single_view(self, eval_loader, view_idx):
-        """Evaluate one FragmentCIGA view independently."""
-        view = self.views[view_idx]
-        view.eval()
-
-        total_loss = 0.0
-        correct = 0
-        total = 0
-        num_batches = 0
-        prob_chunks = [] if self.track_roc_auc else None
-        label_chunks = [] if self.track_roc_auc else None
-
-        for batch in eval_loader:
-            batch = batch.to(self.device)
-            labels = self._labels_from_batch(batch)
-            predictions = view(batch)
-            total_loss += float(prediction_loss(predictions, labels).item())
-            correct += (predictions.argmax(dim=-1) == labels).sum().item()
-            total += labels.size(0)
-            num_batches += 1
-            if self.track_roc_auc:
-                prob_chunks.append(predictions.exp().cpu())
-                label_chunks.append(labels.cpu())
-
-        accuracy = correct / total if total else 0.0
-        roc_auc = self._roc_auc_from_chunks(prob_chunks, label_chunks)
-        avg_loss = total_loss / num_batches if num_batches else 0.0
-        return {"loss": avg_loss, "acc": accuracy, "auc": roc_auc}
-
-    def evaluate_views(self, eval_loader, return_loss_components=False):
-        """Evaluate all views together with probability averaging.
-
-        This mirrors the training-time multi-view prediction average and gives
-        validation diagnostics before the final SuGAREnsemble wrapper is built.
-        """
+    def evaluate_all(self, eval_loader, return_loss_components=False):
+        """Single-pass evaluation returning per-view and ensemble metrics."""
         for view in self.views:
             view.eval()
 
         use_irm = self.uses_irm()
         use_aux = self.lambda_contrast > 0 or self.lambda_diversity > 0 or use_irm
+        num_views = len(self.views)
         env_idx = self._make_env_idx(eval_loader)
+
+        view_correct = [0] * num_views
+        view_total = [0] * num_views
+        view_loss_sum = [0.0] * num_views
+        view_prob_chunks = [[] for _ in range(num_views)] if self.track_roc_auc else None
+        view_label_chunks = [[] for _ in range(num_views)] if self.track_roc_auc else None
 
         total_loss = 0.0
         component_totals = {key: 0.0 for key in self.loss_component_keys()}
@@ -330,32 +303,51 @@ class SuGARTrainer:
                     batch_size = labels.size(0)
                     start = step * eval_loader.batch_size
                     batch_env = env_idx[start: start + batch_size].to(self.device)
-                loss, components = self._compute_components(per_view, labels, batch_env)
+                loss, components, per_view_losses = self._compute_components(per_view, labels, batch_env)
+
+            for i, (pv, pv_loss) in enumerate(zip(per_view, per_view_losses)):
+                preds = pv["predictions"]
+                view_loss_sum[i] += float(pv_loss.item())
+                view_correct[i] += (preds.argmax(dim=-1) == labels).sum().item()
+                view_total[i] += labels.size(0)
+                if self.track_roc_auc:
+                    view_prob_chunks[i].append(preds.detach().exp().cpu())
+                    view_label_chunks[i].append(labels.cpu())
 
             avg_probs = torch.stack(
-                [pv["predictions"].detach().exp() for pv in per_view],
-                dim=0,
+                [pv["predictions"].detach().exp() for pv in per_view], dim=0
             ).mean(dim=0)
-            pred_labels = avg_probs.argmax(dim=-1)
-            correct += (pred_labels == labels).sum().item()
+            correct += (avg_probs.argmax(dim=-1) == labels).sum().item()
             total += labels.size(0)
-
             total_loss += float(loss.detach().item())
             for key, value in components.items():
                 component_totals[key] += float(value.detach().item())
             num_batches += 1
-
             if self.track_roc_auc:
                 prob_chunks.append(avg_probs.cpu())
                 label_chunks.append(labels.detach().cpu())
+
+        per_view_metrics = []
+        for i in range(num_views):
+            auc = (
+                self._roc_auc_from_chunks(view_prob_chunks[i], view_label_chunks[i])
+                if self.track_roc_auc
+                else None
+            )
+            per_view_metrics.append({
+                "loss": view_loss_sum[i] / num_batches if num_batches else 0.0,
+                "acc": view_correct[i] / view_total[i] if view_total[i] else 0.0,
+                "auc": auc,
+            })
 
         avg_loss = total_loss / num_batches if num_batches else 0.0
         accuracy = correct / total if total else 0.0
         roc_auc = self._roc_auc_from_chunks(prob_chunks, label_chunks)
         avg_components = self._average_components(component_totals, num_batches)
+
         if return_loss_components:
-            return avg_loss, accuracy, roc_auc, avg_components
-        return avg_loss, accuracy, roc_auc
+            return avg_loss, accuracy, roc_auc, avg_components, per_view_metrics
+        return avg_loss, accuracy, roc_auc, per_view_metrics
 
     def _loss_log_fieldnames(self):
         return (
@@ -447,22 +439,17 @@ class SuGARTrainer:
             metric_label = best_metric_label
 
             if val_loader is not None:
-                for i in range(num_views):
-                    view_metrics = self.evaluate_single_view(val_loader, i)
-                    view_val_accs.append(view_metrics["acc"])
-                    view_val_aucs.append(view_metrics["auc"])
-                    view_metric, _ = self._metric_for_selection(
-                        view_metrics["acc"],
-                        view_metrics["auc"],
-                    )
-                    if view_metric > per_view_best_metric[i]:
-                        per_view_best_metric[i] = view_metric
-                        per_view_best_weights[i] = deepcopy(self.views[i].state_dict())
-
-                val_loss, val_acc, val_auc, val_components = self.evaluate_views(
+                val_loss, val_acc, val_auc, val_components, all_view_metrics = self.evaluate_all(
                     val_loader,
                     return_loss_components=True,
                 )
+                for i, vm in enumerate(all_view_metrics):
+                    view_val_accs.append(vm["acc"])
+                    view_val_aucs.append(vm["auc"])
+                    view_metric, _ = self._metric_for_selection(vm["acc"], vm["auc"])
+                    if view_metric > per_view_best_metric[i]:
+                        per_view_best_metric[i] = view_metric
+                        per_view_best_weights[i] = deepcopy(self.views[i].state_dict())
                 val_selection_metric, metric_label = self._metric_for_selection(val_acc, val_auc)
                 best_metric_label = metric_label
 
