@@ -85,6 +85,7 @@ class SuGARTrainer:
             "diversity_loss",
             "diversity_loss_weighted",
             "irm_loss",
+            "irm_loss_weighted",
         )
 
     def uses_irm(self):
