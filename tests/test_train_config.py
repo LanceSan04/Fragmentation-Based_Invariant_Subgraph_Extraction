@@ -6,12 +6,23 @@ Run this file from the repository root with:
 """
 
 import argparse
+import os.path as osp
+import tempfile
 import unittest
+from types import SimpleNamespace
 
 import torch
+from torch.optim import Adam
 
 from src.data.config_hash import preprocessing_config_hash
 from train_sugar import Config, build_shared_initialized_views, merge_config_and_cli
+from src.training.checkpoint import (
+    checkpoint_feature_dims,
+    load_checkpoint,
+    load_view_state_dicts,
+    save_training_checkpoint,
+    view_state_dicts_from_checkpoint,
+)
 
 
 class TrainConfigTests(unittest.TestCase):
@@ -138,6 +149,97 @@ class TrainConfigTests(unittest.TestCase):
             [view.fragment_edge_sampler.seed for view in views],
             [7, 8, 9],
         )
+
+    def test_full_checkpoint_saves_resume_and_eval_metadata(self):
+        config = Config(
+            {
+                "num_views": 2,
+                "num_classes": 2,
+                "gnn_layers": 1,
+                "hidden_dim": 8,
+                "edge_ratio": 0.25,
+                "dropout": 0.0,
+                "fragment_sample_ratio": 1.0,
+                "sampler_seed": 11,
+                "processed_dir": "data/processed/example/group_graph",
+                "aggregation_mode": "mean",
+            }
+        )
+        views = build_shared_initialized_views(
+            config,
+            atom_feat_dim=133,
+            fragment_feat_dim=149,
+            atom_edge_dim=14,
+            fragment_edge_dim=14,
+        )
+        trainer = SimpleNamespace(
+            views=views,
+            optimizers=[Adam(view.parameters(), lr=0.001) for view in views],
+        )
+        feature_dims = {
+            "atom_feature_dim": 133,
+            "fragment_feature_dim": 149,
+            "atom_edge_dim": 14,
+            "fragment_edge_dim": 14,
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = osp.join(tmp_dir, "checkpoint.pt")
+            save_training_checkpoint(
+                path,
+                trainer,
+                config,
+                feature_dims,
+                history={"train_loss": [1.0]},
+                selected_view_indices=[0],
+                metrics={"ood_test": {"auc": 0.75}},
+                epoch=1,
+            )
+            payload = load_checkpoint(path)
+
+        self.assertEqual(payload["checkpoint_version"], "0.1")
+        self.assertEqual(payload["config"]["processed_dir"], "data/processed/example/group_graph")
+        self.assertEqual(payload["feature_dims"], feature_dims)
+        self.assertEqual(payload["selected_view_indices"], [0])
+        self.assertEqual(payload["epoch"], 1)
+        self.assertEqual(len(payload["view_state_dicts"]), 2)
+        self.assertEqual(len(payload["optimizer_state_dicts"]), 2)
+        self.assertEqual(checkpoint_feature_dims(payload), feature_dims)
+
+    def test_checkpoint_loader_accepts_legacy_view_state_dict_payload(self):
+        config = Config(
+            {
+                "num_views": 1,
+                "num_classes": 2,
+                "gnn_layers": 1,
+                "hidden_dim": 8,
+                "edge_ratio": 0.25,
+                "dropout": 0.0,
+                "fragment_sample_ratio": 1.0,
+                "sampler_seed": 3,
+            }
+        )
+        source = build_shared_initialized_views(
+            config,
+            atom_feat_dim=133,
+            fragment_feat_dim=149,
+            atom_edge_dim=14,
+            fragment_edge_dim=14,
+        )
+        target = build_shared_initialized_views(
+            config,
+            atom_feat_dim=133,
+            fragment_feat_dim=149,
+            atom_edge_dim=14,
+            fragment_edge_dim=14,
+        )
+        legacy_payload = {0: source[0].state_dict()}
+
+        self.assertEqual(set(view_state_dicts_from_checkpoint(legacy_payload)), {0})
+        load_view_state_dicts(target, legacy_payload)
+
+        for key, value in source[0].state_dict().items():
+            self.assertTrue(torch.equal(value, target[0].state_dict()[key]), key)
 
 
 if __name__ == "__main__":

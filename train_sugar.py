@@ -31,6 +31,16 @@ from src.models.fragment_ciga import FragmentCIGA
 from src.models.sugar_ensemble import SuGAREnsemble
 from src.training.sugar_trainer import SuGARTrainer
 from src.training.model_selection import greedy_view_selection, _accuracy_on_loader, _auc_on_loader
+from src.training.checkpoint import (
+    checkpoint_config,
+    checkpoint_feature_dims,
+    feature_dims_dict,
+    load_checkpoint,
+    load_optimizer_state_dicts,
+    load_view_state_dicts,
+    save_training_checkpoint,
+    view_state_dicts_from_checkpoint,
+)
 
 
 @dataclass
@@ -44,6 +54,14 @@ class Config:
 
     def get(self, key, default=None):
         return getattr(self, key, default)
+
+    def to_dict(self):
+        """Return a plain dictionary snapshot of public config attributes."""
+        return {
+            key: value
+            for key, value in vars(self).items()
+            if not key.startswith("_")
+        }
 
 
 def load_config(config_path):
@@ -117,8 +135,109 @@ def build_shared_initialized_views(
     return views
 
 
+def strip_non_tensor_batch_fields(dataloaders):
+    """Remove bulky string/list metadata that PyG should not collate in training."""
+    keys_to_remove = ["fragment_to_atoms", "smiles", "molecule_id", "metadata"]
+    for loader in dataloaders.values():
+        if loader is not None and hasattr(loader, "dataset"):
+            for data in loader.dataset:
+                for key in keys_to_remove:
+                    if hasattr(data, key):
+                        delattr(data, key)
+                    if key in data._store:
+                        del data._store[key]
+
+
+def infer_feature_dimensions(train_loader):
+    """Infer model input dimensions from the first processed training batch."""
+    first_batch = next(iter(train_loader))
+    atom_feat_dim = first_batch.x.size(1)
+    fragment_feat_dim = (
+        first_batch.fragment_x_static.size(1)
+        if hasattr(first_batch, "fragment_x_static")
+        else atom_feat_dim
+    )
+    atom_edge_dim = first_batch.edge_attr.size(1)
+    fragment_edge_dim = first_batch.fragment_edge_attr.size(1)
+    return feature_dims_dict(
+        atom_feat_dim,
+        fragment_feat_dim,
+        atom_edge_dim,
+        fragment_edge_dim,
+    )
+
+
+def build_views_from_feature_dims(config, feature_dims):
+    """Build shared-initialized FragmentCIGA views from a feature-dim mapping."""
+    return build_shared_initialized_views(
+        config,
+        feature_dims["atom_feature_dim"],
+        feature_dims["fragment_feature_dim"],
+        feature_dims["atom_edge_dim"],
+        feature_dims["fragment_edge_dim"],
+    )
+
+
+def build_trainer(config, views, device):
+    """Create a SuGARTrainer from the effective config."""
+    return SuGARTrainer(
+        views,
+        device=device,
+        learning_rate=config.learning_rate,
+        weight_decay=config.weight_decay,
+        lambda_contrast=config.lambda_contrast,
+        lambda_diversity=config.lambda_diversity,
+        lambda_irm=config.lambda_irm,
+        num_envs=config.num_envs,
+        contrast_temperature=config.contrast_temperature,
+        contrast_sampling=config.contrast_sampling,
+        track_roc_auc=config.track_roc_auc,
+        loss_log_path=config.get("loss_log_path", "logs/sugar_training_losses.csv"),
+    )
+
+
+def resolve_device(config):
+    """Resolve requested device with CUDA fallback."""
+    device_name = config.get("device", "cuda")
+    return torch.device("cuda" if torch.cuda.is_available() and device_name == "cuda" else "cpu")
+
+
+def apply_checkpoint_defaults(config, checkpoint_payload):
+    """Fill missing config fields from a full checkpoint's saved config."""
+    model_shape_keys = {
+        "num_views",
+        "num_classes",
+        "gnn_layers",
+        "hidden_dim",
+        "edge_ratio",
+        "dropout",
+        "fragment_sample_ratio",
+        "sampler_seed",
+        "aggregation_mode",
+    }
+    for key, value in checkpoint_config(checkpoint_payload).items():
+        if key in model_shape_keys or not hasattr(config, key):
+            setattr(config, key, value)
+    return config
+
+
+def align_num_views_to_checkpoint(config, checkpoint_payload):
+    """Make config.num_views match the loaded checkpoint view count."""
+    num_checkpoint_views = len(view_state_dicts_from_checkpoint(checkpoint_payload))
+    current = config.get("num_views", None)
+    if current is None:
+        config.num_views = num_checkpoint_views
+    elif int(current) != num_checkpoint_views:
+        print(
+            f"Checkpoint has {num_checkpoint_views} view(s); "
+            f"overriding configured num_views={current} for loading."
+        )
+        config.num_views = num_checkpoint_views
+    return config
+
+
 @torch.no_grad()
-def _evaluate_ensemble(ensemble, loader, device, track_roc_auc=True):
+def _evaluate_ensemble(ensemble, loader, device, track_roc_auc=True, view_indices=None):
     """Evaluate a SuGAREnsemble on a data loader.
 
     Returns:
@@ -137,7 +256,7 @@ def _evaluate_ensemble(ensemble, loader, device, track_roc_auc=True):
 
     for batch in loader:
         batch = batch.to(device)
-        predictions = ensemble(batch)  # log-probs [B, C]
+        predictions = ensemble(batch, view_indices=view_indices)  # log-probs [B, C]
 
         labels = batch.y
         if labels.dim() == 2:
@@ -175,9 +294,214 @@ def _evaluate_ensemble(ensemble, loader, device, track_roc_auc=True):
     return avg_loss, accuracy, roc_auc
 
 
+def run_training(config, resume_from=None):
+    """Train FragmentCIGA views and optionally resume from a checkpoint."""
+    checkpoint_payload = None
+    if resume_from:
+        checkpoint_payload = load_checkpoint(resume_from, map_location="cpu")
+        apply_checkpoint_defaults(config, checkpoint_payload)
+        align_num_views_to_checkpoint(config, checkpoint_payload)
+        print(f"Loaded checkpoint for resume: {resume_from}")
+
+    device = resolve_device(config)
+    print(f"Using device: {device}")
+
+    print(f"Loading data from {config.processed_dir}...")
+    dataloaders = build_split_dataloaders(config.processed_dir, config)
+
+    train_split = config.get("train_split", "train")
+    validation_split = config.get("validation_split", config.get("valid_split", "valid"))
+    test_split = config.get("test_split", "test")
+
+    train_loader = dataloaders.get(train_split)
+    val_loader = dataloaders.get(validation_split)
+    test_loader = dataloaders.get(test_split)
+
+    if train_loader is None:
+        raise ValueError(f"No training data found for split {train_split!r} in {config.processed_dir}")
+
+    strip_non_tensor_batch_fields(dataloaders)
+
+    print("Building FragmentCIGA views...")
+    feature_dims = checkpoint_feature_dims(checkpoint_payload) if checkpoint_payload is not None else {}
+    if not feature_dims:
+        feature_dims = infer_feature_dimensions(train_loader)
+
+    print(f"  Atom feature dim:     {feature_dims['atom_feature_dim']}")
+    print(f"  Fragment feature dim: {feature_dims['fragment_feature_dim']}")
+    print(f"  Atom edge dim:        {feature_dims['atom_edge_dim']}")
+    print(f"  Fragment edge dim:    {feature_dims['fragment_edge_dim']}")
+
+    views = build_views_from_feature_dims(config, feature_dims)
+    if checkpoint_payload is not None:
+        load_view_state_dicts(views, checkpoint_payload)
+        print(f"  Restored weights for {len(views)} view(s)")
+    print(f"  Created {config.num_views} FragmentCIGA view(s) with shared initialization")
+
+    trainer = build_trainer(config, views, device)
+    if checkpoint_payload is not None:
+        restored_opts = load_optimizer_state_dicts(trainer, checkpoint_payload)
+        if restored_opts:
+            print(f"  Restored optimizer state for {restored_opts} view(s)")
+
+    if val_loader is None and validation_split is not None:
+        print(f"Validation split {validation_split!r} was not found; training without validation.")
+    print(f"Starting training on split {train_split!r}...")
+    history = trainer.train(
+        train_loader,
+        val_loader=val_loader,
+        num_epochs=config.epochs,
+        patience=config.patience,
+        restore_best_weights=True,
+    )
+
+    ensemble = SuGAREnsemble(
+        trainer.views,
+        aggregation_mode=config.get("aggregation_mode", config.get("aggregation", "mean")),
+    )
+
+    metrics = {}
+    if test_loader is not None:
+        print(f"\nEvaluating ensemble on test split {test_split!r}...")
+        test_loss, test_acc, test_auc = _evaluate_ensemble(
+            ensemble, test_loader, device, track_roc_auc=config.track_roc_auc
+        )
+        metrics[test_split] = {"loss": test_loss, "acc": test_acc, "auc": test_auc}
+        auc_str = f" | {test_split} AUC: {test_auc:.4f}" if test_auc is not None else ""
+        print(f"{test_split} Loss: {test_loss:.4f} | {test_split} Accuracy: {test_acc:.4f}{auc_str}")
+
+    for split_name in config.get("report_splits", []) or []:
+        if split_name in {validation_split, test_split}:
+            continue
+        loader = dataloaders.get(split_name)
+        if loader is None:
+            print(f"Report split {split_name!r} was not found; skipping.")
+            continue
+        loss, acc, auc = _evaluate_ensemble(
+            ensemble, loader, device, track_roc_auc=config.track_roc_auc
+        )
+        metrics[split_name] = {"loss": loss, "acc": acc, "auc": auc}
+        auc_str = f" | {split_name} AUC: {auc:.4f}" if auc is not None else ""
+        print(f"{split_name} Loss: {loss:.4f} | {split_name} Accuracy: {acc:.4f}{auc_str}")
+
+    selected_views = None
+    if config.get("greedy_model_selection", False) and val_loader is not None:
+        print("\nRunning greedy view selection on validation set...")
+        selected_views = greedy_view_selection(
+            ensemble, val_loader, device, use_auc=trainer.track_roc_auc
+        )
+
+        if test_loader is not None:
+            print("\nEvaluating greedy-selected ensemble on test set...")
+            test_acc_greedy = _accuracy_on_loader(
+                ensemble, test_loader, device, view_indices=selected_views
+            )
+            print(
+                f"{test_split} Accuracy (greedy-selected views {selected_views}): "
+                f"{test_acc_greedy:.4f}"
+            )
+            test_auc_greedy = None
+            if trainer.track_roc_auc:
+                test_auc_greedy = _auc_on_loader(
+                    ensemble, test_loader, device, view_indices=selected_views
+                )
+                if test_auc_greedy is not None:
+                    print(
+                        f"{test_split} AUC (greedy-selected views {selected_views}): "
+                        f"{test_auc_greedy:.4f}"
+                    )
+            metrics[f"{test_split}_greedy"] = {
+                "acc": test_acc_greedy,
+                "auc": test_auc_greedy,
+                "selected_view_indices": selected_views,
+            }
+
+    if config.get("save_model", None):
+        model_path = Path(config.get("save_model"))
+        save_training_checkpoint(
+            model_path,
+            trainer,
+            config,
+            feature_dims,
+            history=history,
+            selected_view_indices=selected_views,
+            metrics=metrics,
+            epoch=len(history.get("train_loss", [])),
+        )
+        print(f"Checkpoint saved to {model_path}")
+
+    return {
+        "history": history,
+        "metrics": metrics,
+        "trainer": trainer,
+        "ensemble": ensemble,
+        "selected_view_indices": selected_views,
+        "feature_dims": feature_dims,
+    }
+
+
+def evaluate_checkpoint(config, checkpoint_path, split_names=None, use_selected_views=False):
+    """Load a trained checkpoint and evaluate it on configured split loaders."""
+    checkpoint_payload = load_checkpoint(checkpoint_path, map_location="cpu")
+    apply_checkpoint_defaults(config, checkpoint_payload)
+    align_num_views_to_checkpoint(config, checkpoint_payload)
+
+    device = resolve_device(config)
+    print(f"Using device: {device}")
+    print(f"Loading data from {config.processed_dir}...")
+    dataloaders = build_split_dataloaders(config.processed_dir, config)
+    strip_non_tensor_batch_fields(dataloaders)
+
+    feature_dims = checkpoint_feature_dims(checkpoint_payload)
+    if not feature_dims:
+        first_loader = next(iter(dataloaders.values()))
+        feature_dims = infer_feature_dimensions(first_loader)
+
+    views = build_views_from_feature_dims(config, feature_dims)
+    load_view_state_dicts(views, checkpoint_payload)
+    for view in views:
+        view.to(device)
+
+    ensemble = SuGAREnsemble(
+        views,
+        aggregation_mode=config.get("aggregation_mode", config.get("aggregation", "mean")),
+    )
+
+    view_indices = None
+    selected = checkpoint_payload.get("selected_view_indices") if isinstance(checkpoint_payload, dict) else None
+    if use_selected_views and selected:
+        view_indices = selected
+        print(f"Using checkpoint greedy-selected views: {view_indices}")
+
+    if split_names is None:
+        split_names = [config.get("test_split", "test")]
+        split_names.extend(config.get("report_splits", []) or [])
+
+    results = {}
+    for split_name in split_names:
+        loader = dataloaders.get(split_name)
+        if loader is None:
+            print(f"Split {split_name!r} was not found; skipping.")
+            continue
+        loss, acc, auc = _evaluate_ensemble(
+            ensemble,
+            loader,
+            device,
+            track_roc_auc=config.get("track_roc_auc", True),
+            view_indices=view_indices,
+        )
+        results[split_name] = {"loss": loss, "acc": acc, "auc": auc}
+        auc_str = f" | {split_name} AUC: {auc:.4f}" if auc is not None else ""
+        print(f"{split_name} Loss: {loss:.4f} | {split_name} Accuracy: {acc:.4f}{auc_str}")
+
+    return results
+
+
 def main(args):
     """Main training function."""
     config = build_config(args)
+    result = run_training(config, resume_from=config.get("resume_from", None))
+    return result["history"]
 
     device_name = config.get("device", "cuda")
     device = torch.device("cuda" if torch.cuda.is_available() and device_name == "cuda" else "cpu")
@@ -372,6 +696,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--save_model", type=str, default=None)
+    parser.add_argument("--resume_from", type=str, default=None)
     parser.add_argument("--loss_log_path", type=str, default=None)
     parser.add_argument(
         "--track_roc_auc",

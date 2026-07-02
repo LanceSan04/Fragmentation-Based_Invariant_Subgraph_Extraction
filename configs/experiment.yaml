@@ -1,11 +1,27 @@
 # Unified experiment config for preprocessing, FragmentCIGA training, and
 # SuGAREnsemble evaluation.
 #
-# Current DrugOOD preprocessing command:
-#   .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\experiment.yaml --validate-loaders
+# Preferred consolidated CLI commands:
 #
-# Short end-to-end training smoke command:
-#   .\.venv\Scripts\python.exe train_sugar.py --config configs\experiment.yaml --epochs 2 --patience 2 --num_views 2 --hidden_dim 32 --gnn_layers 2 --batch_size 32 --device cpu --loss_log_path logs\smoke_sugar_training_losses.csv
+#   Preprocess DrugOOD and validate batches:
+#     .\.venv\Scripts\python.exe main.py preprocess --config configs\experiment.yaml --validate-loaders
+#
+#   Short end-to-end training smoke with checkpoint:
+#     .\.venv\Scripts\python.exe main.py train --config configs\experiment.yaml --epochs 1 --patience 1 --num-views 1 --hidden-dim 8 --gnn-layers 1 --batch-size 512 --device cpu --lambda-contrast 0 --lambda-diversity 0 --lambda-irm 0 --save-model checkpoints\smoke.pt --loss-log-path logs\smoke_losses.csv
+#
+#   Evaluate a saved checkpoint without training:
+#     .\.venv\Scripts\python.exe main.py eval checkpoints\smoke.pt --config configs\experiment.yaml --splits ood_test iid_test --device cpu
+#
+#   Resume training from a saved checkpoint:
+#     .\.venv\Scripts\python.exe main.py resume checkpoints\smoke.pt --config configs\experiment.yaml --epochs 1 --device cpu --save-model checkpoints\smoke_resumed.pt
+#
+#   Run diagnostics through the consolidated CLI:
+#     .\.venv\Scripts\python.exe main.py diagnostics fragments data\processed\drugood_lbap_core_ec50_assay\group_graph --splits train ood_val ood_test
+#     .\.venv\Scripts\python.exe main.py diagnostics losses logs\sugar_training_losses.csv
+#
+# The original entrypoints still work for focused debugging:
+#   .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\experiment.yaml --validate-loaders
+#   .\.venv\Scripts\python.exe train_sugar.py --config configs\experiment.yaml
 #
 # This one file can be used in two modes:
 #
@@ -28,7 +44,9 @@
 #      split_names: [train, iid_val, ood_val, iid_test, ood_test]
 #
 # Keep `processed_dir` aligned with both the dataset and fragmentation method
-# so outputs from different fragmenters do not overwrite each other.
+# so outputs from different fragmenters do not overwrite each other. If you run
+# main.py with `--fragmentation recap` and do not pass `--processed-dir`, main.py
+# will switch the last processed_dir path component to `recap` automatically.
 
 # Dataset identifier stored in each processed .pt file's metadata.
 #
@@ -172,10 +190,13 @@ follow_batch:
   - fragment_x_static
 
 # FragmentCIGA view settings.
-# train_sugar.py builds `num_views` separate FragmentCIGA views from one shared
-# initial state, then trains them with SuGARTrainer. After training, the views
-# are wrapped in SuGAREnsemble for inference-time aggregation.
-# Explicit CLI values override YAML defaults for a single run.
+# train_sugar.py/main.py builds `num_views` separate FragmentCIGA views from
+# one shared initial state, then trains them with SuGARTrainer. After training,
+# the views are wrapped in SuGAREnsemble for inference-time aggregation.
+# Explicit CLI values override YAML defaults for a single run. When resuming or
+# evaluating a checkpoint, architecture-defining fields such as num_views,
+# gnn_layers, hidden_dim, edge_ratio, dropout, sampler_seed, and aggregation_mode
+# come from the checkpoint so the saved weights can be reconstructed correctly.
 num_classes: 2
 gnn_layers: 3
 hidden_dim: 128
@@ -199,15 +220,24 @@ epochs: 40
 patience: 20
 device: cuda
 
-# Optional checkpoint path. Leave empty to skip saving.
-# Current save format is `{view_index: FragmentCIGA.state_dict()}` only. It does
-# not yet include optimizer state, config snapshot, selected greedy views, or
-# training history.
-save_model:
+# Optional checkpoint path. Leave empty to skip saving. When set, the trainer
+# writes a full checkpoint containing:
+#   - effective config snapshot;
+#   - inferred atom/fragment feature dimensions;
+#   - one FragmentCIGA state_dict per view;
+#   - one optimizer state_dict per view, for resume training;
+#   - training history and final metrics;
+#   - greedy-selected view indices, when greedy_model_selection runs.
+# Legacy checkpoints that only contain `{view_index: state_dict}` can still be
+# loaded for evaluation/resume if the active config supplies the right model
+# architecture and feature dimensions.
+# save_model: checkpoints/{dataset}_{fragmentation}_{short_run_name}.pt
+save_model: checkpoints/drugood_lbap_core_ec50_assay_group_graph_baseline.pt
 
 # Per-epoch CSV with total loss, component losses, weighted auxiliary
 # contributions, validation metrics, and per-view validation diagnostics.
-# Leave empty to disable.
+# Leave empty to disable. You can plot it with:
+#   .\.venv\Scripts\python.exe main.py diagnostics losses logs\sugar_training_losses.csv
 loss_log_path: logs/sugar_training_losses.csv
 
 # Auxiliary loss settings.
