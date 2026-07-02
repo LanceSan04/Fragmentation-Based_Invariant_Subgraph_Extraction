@@ -78,6 +78,16 @@ class FragmentPipelineTests(unittest.TestCase):
     def test_all_brics_fragment_edges_reconstruct_original_atom_graph(self):
         self.assert_all_fragment_edges_reconstruct_original_atom_graph("brics")
 
+    def test_all_recap_fragment_edges_reconstruct_original_atom_graph(self):
+        self.assert_all_fragment_edges_reconstruct_original_atom_graph("recap")
+
+    def test_recap_fragments_recap_cleavable_molecule(self):
+        data = self.build_data("CC(=O)NCCOC(=O)c1ccccc1", "recap")
+
+        self.assertGreater(data.fragment_x_static.size(0), 1)
+        self.assertTrue(all(fragment_type == "recap" for fragment_type in data.fragment_types))
+        self.assertEqual(data.atom_to_fragment.numel(), data.x.size(0))
+
     def test_group_graph_resolves_overlapping_split_fragments(self):
         data = self.build_data(
             "N[S](=O)(=O)c1cc2c(NC=N[S]2(=O)=O)cc1Cl",

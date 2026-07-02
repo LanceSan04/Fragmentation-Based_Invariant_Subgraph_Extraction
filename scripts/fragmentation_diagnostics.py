@@ -4,8 +4,7 @@
 Example:
     .\.venv\Scripts\python.exe scripts\fragmentation_diagnostics.py ^
         data\processed\drugood_lbap_core_ec50_assay\group_graph ^
-        --splits train ood_val ood_test iid_val iid_test ^
-        --output-dir reports\fragmentation_diagnostics
+        --splits train ood_val ood_test iid_val iid_test
 """
 
 import argparse
@@ -94,7 +93,7 @@ def density(num_edges, num_nodes):
     return float(num_edges) / float(num_nodes * (num_nodes - 1) / 2.0)
 
 
-def molecule_row(split_name, split_index, data):
+def molecule_row(split_name, split_index, data, dataset="", fragmentation=""):
     num_atoms = int(data.x.size(0))
     num_bonds = int(data.bond_attr.size(0))
     num_fragments = int(data.fragment_x_static.size(0))
@@ -104,6 +103,8 @@ def molecule_row(split_name, split_index, data):
     zero_edge = num_fragment_edges == 0
 
     return {
+        "dataset": dataset,
+        "fragmentation": fragmentation,
         "split": split_name,
         "split_index": split_index,
         "molecule_id": safe_attr(data, "molecule_id", ""),
@@ -124,7 +125,7 @@ def molecule_row(split_name, split_index, data):
     }
 
 
-def fragment_rows(split_name, split_index, data):
+def fragment_rows(split_name, split_index, data, dataset="", fragmentation=""):
     atom_counts = fragment_atom_counts(data)
     internal_bond_counts = fragment_internal_bond_counts(data)
     fragment_types = list(safe_attr(data, "fragment_types", []) or [])
@@ -133,6 +134,8 @@ def fragment_rows(split_name, split_index, data):
     for fragment_id, atom_count in enumerate(atom_counts):
         rows.append(
             {
+                "dataset": dataset,
+                "fragmentation": fragmentation,
                 "split": split_name,
                 "split_index": split_index,
                 "molecule_id": safe_attr(data, "molecule_id", ""),
@@ -204,6 +207,8 @@ def split_summary_rows(molecule_rows, fragment_rows_all, top_k):
         smiles_counts = Counter(row["fragment_smiles"] for row in fragments if row["fragment_smiles"])
 
         summary = {
+            "dataset": rows_for_split[0].get("dataset", ""),
+            "fragmentation": rows_for_split[0].get("fragmentation", ""),
             "split": split_name,
             "num_molecules": len(rows_for_split),
             "num_fragments_total": len(fragments),
@@ -253,13 +258,32 @@ def collect_diagnostics(processed_dir, splits, max_molecules=None, top_k=20):
     for split_name in splits:
         split_path = processed_dir / f"{split_name}.pt"
         payload = load_payload(split_path)
-        metadata[split_name] = payload["metadata"]
+        split_metadata = payload["metadata"]
+        metadata[split_name] = split_metadata
+        dataset = split_metadata.get("dataset", "")
+        fragmentation = split_metadata.get("fragmentation", "")
         molecules = payload["molecule_data"]
         if max_molecules is not None:
             molecules = molecules[:max_molecules]
         for split_index, data in enumerate(molecules):
-            molecule_rows.append(molecule_row(split_name, split_index, data))
-            fragments.extend(fragment_rows(split_name, split_index, data))
+            molecule_rows.append(
+                molecule_row(
+                    split_name,
+                    split_index,
+                    data,
+                    dataset=dataset,
+                    fragmentation=fragmentation,
+                )
+            )
+            fragments.extend(
+                fragment_rows(
+                    split_name,
+                    split_index,
+                    data,
+                    dataset=dataset,
+                    fragmentation=fragmentation,
+                )
+            )
 
     summary_rows = split_summary_rows(molecule_rows, fragments, top_k=top_k)
     return {
@@ -421,18 +445,38 @@ def default_splits(processed_dir):
     return [path.stem for path in sorted(processed_dir.glob("*.pt"))]
 
 
+def safe_path_part(value, fallback):
+    text = str(value or "").strip().lower()
+    if not text:
+        text = fallback
+    return "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in text)
+
+
+def default_output_dir(diagnostics, processed_dir):
+    metadata_by_split = diagnostics.get("metadata", {})
+    first_metadata = next(iter(metadata_by_split.values()), {})
+    dataset = safe_path_part(first_metadata.get("dataset"), processed_dir.parent.name)
+    fragmentation = safe_path_part(first_metadata.get("fragmentation"), processed_dir.name)
+    return Path("reports") / "fragmentation_diagnostics" / f"{dataset}_{fragmentation}"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("processed_dir", help="Directory containing processed split .pt files.")
     parser.add_argument("--splits", nargs="+", help="Split names to analyze. Defaults to all .pt files.")
-    parser.add_argument("--output-dir", default="reports/fragmentation_diagnostics")
+    parser.add_argument(
+        "--output-dir",
+        help=(
+            "Directory for CSV/JSON/plots. Defaults to "
+            "reports/fragmentation_diagnostics/{dataset}_{fragmentation}."
+        ),
+    )
     parser.add_argument("--top-k", type=int, default=20, help="Number of top domains/fragments to report.")
     parser.add_argument("--max-molecules", type=int, help="Optional quick-test cap per split.")
     parser.add_argument("--no-plots", action="store_true", help="Write CSV/JSON only.")
     args = parser.parse_args()
 
     processed_dir = Path(args.processed_dir)
-    output_dir = Path(args.output_dir)
     splits = args.splits or default_splits(processed_dir)
     if not splits:
         raise FileNotFoundError(f"No .pt split files found in {processed_dir}")
@@ -443,6 +487,7 @@ def main():
         max_molecules=args.max_molecules,
         top_k=args.top_k,
     )
+    output_dir = Path(args.output_dir) if args.output_dir else default_output_dir(diagnostics, processed_dir)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     molecule_path = output_dir / "molecule_fragmentation_stats.csv"

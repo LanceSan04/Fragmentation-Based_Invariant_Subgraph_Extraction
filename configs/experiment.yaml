@@ -49,8 +49,8 @@ preprocess_version: "0.1.0"
 # Available now:
 #   group_graph: default Group Graph-style molecular fragments.
 #   brics: RDKit BRICS fragments for ablation/comparison.
-# Future:
-#   recap: planned/not active in the fragmenter registry yet.
+#   recap: RECAP-rule bond cuts projected onto the original molecule, preserving
+#     every atom for reconstruction/provenance.
 fragmentation: group_graph
 
 # Fragment/supernode feature construction.
@@ -77,11 +77,14 @@ fragment_feature_dim: 149
 #   processed_dir: data/processed/bbbp/group_graph
 #   processed_dir: data/processed/bbbp/brics
 #   processed_dir: data/processed/drugood_lbap_core_ec50_assay/group_graph
+#   processed_dir: data/processed/drugood_lbap_core_ec50_assay/brics
+#   processed_dir: data/processed/drugood_lbap_core_ec50_assay/recap
 processed_dir: data/processed/drugood_lbap_core_ec50_assay/group_graph
 
-# When strict is false, skipped records are written here for inspection.
-# If omitted, preprocess.py writes preprocess_failures.csv inside processed_dir.
-failure_report_path: data/processed/drugood_lbap_core_ec50_assay/group_graph/preprocess_failures.csv
+# When strict is false, skipped records are written to preprocess_failures.csv
+# inside processed_dir by default. Set failure_report_path only if you need a
+# custom location.
+# failure_report_path: data/processed/drugood_lbap_core_ec50_assay/group_graph/preprocess_failures.csv
 
 # Real dataset input path. In smoke mode, comment raw_path/raw_format out
 # because the inline `splits:` block is the data source.

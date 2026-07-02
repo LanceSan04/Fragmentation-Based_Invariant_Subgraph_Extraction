@@ -38,7 +38,7 @@ Each .pt file contains:
     {
         "metadata": {
             "dataset": "...",
-            "fragmentation": "group_graph" or "brics",
+            "fragmentation": "group_graph", "brics", or "recap",
             "pooling": "mean_atom_and_internal_bond",
             "atom_feature_dim": 133,
             "bond_feature_dim": 14,
