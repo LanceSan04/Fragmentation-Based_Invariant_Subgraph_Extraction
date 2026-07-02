@@ -38,6 +38,7 @@ class SuGARTrainer:
         lambda_diversity=1.0,
         lambda_irm=0.0,
         num_envs=1,
+        env_split_key="domain_id",
         contrast_temperature=0.5,
         contrast_sampling="mul",
         track_roc_auc=True,
@@ -53,6 +54,13 @@ class SuGARTrainer:
             lambda_diversity: Weight for pairwise diversity loss.
             lambda_irm: Weight for IRM penalty. Requires num_envs > 1.
             num_envs: Number of environment partitions for IRM.
+            env_split_key: Data key used to derive the IRM environment split
+                (checked in each example's ``metadata`` dict, falling back to
+                its ``environment_or_group`` value, e.g. DrugOOD's domain_id).
+                Unique key values are grouped into num_envs buckets as evenly
+                as possible; examples sharing a key value always land in the
+                same environment. Set to None/"" to use a random split
+                instead.
             contrast_temperature: Temperature for contrastive loss.
             contrast_sampling: Contrastive sampling mode ('mul', 'var', 'cnc').
             track_roc_auc: If True, use ROC-AUC where available.
@@ -68,6 +76,8 @@ class SuGARTrainer:
         self.lambda_diversity = lambda_diversity
         self.lambda_irm = lambda_irm
         self.num_envs = num_envs
+        self.env_split_key = env_split_key or None
+        self._env_split_key_warned = False
         self.contrast_temperature = contrast_temperature
         self.contrast_sampling = contrast_sampling
         self.track_roc_auc = track_roc_auc and _SKLEARN_AVAILABLE
@@ -183,7 +193,55 @@ class SuGARTrainer:
     def _make_env_idx(self, loader):
         if not self.uses_irm():
             return None
-        return (torch.sigmoid(torch.randn(len(loader.dataset))) > 0.5).long()
+        if self.env_split_key:
+            env_idx = self._env_idx_from_key(loader.dataset)
+            if env_idx is not None:
+                return env_idx
+        return torch.randint(0, self.num_envs, (len(loader.dataset),))
+
+    def _env_idx_from_key(self, dataset):
+        """Group examples into num_envs buckets keyed by env_split_key, or None if absent."""
+        values = [self._extract_env_value(data, self.env_split_key) for data in dataset]
+        if any(value is None for value in values):
+            if not self._env_split_key_warned:
+                print(
+                    f"Warning: env_split_key {self.env_split_key!r} missing on some examples; "
+                    "falling back to a random IRM environment split."
+                )
+                self._env_split_key_warned = True
+            return None
+        bucket_of_value = self._assign_env_buckets(values, self.num_envs)
+        return torch.tensor([bucket_of_value[v] for v in values], dtype=torch.long)
+
+    @staticmethod
+    def _extract_env_value(data, key):
+        """Look up ``key`` in a data example's metadata, or its environment_or_group value."""
+        metadata = getattr(data, "metadata", None)
+        if isinstance(metadata, dict) and key in metadata:
+            return metadata[key]
+        return getattr(data, "environment_or_group", None)
+
+    @staticmethod
+    def _assign_env_buckets(values, num_envs):
+        """Map each unique value to one of num_envs buckets, sized as evenly as possible."""
+
+        def sort_key(value):
+            try:
+                return (0, float(value))
+            except (TypeError, ValueError):
+                return (1, str(value))
+
+        unique_values = sorted(set(values), key=sort_key)
+        base_size, remainder = divmod(len(unique_values), num_envs)
+
+        bucket_of_value = {}
+        cursor = 0
+        for env_id in range(num_envs):
+            chunk_size = base_size + (1 if env_id < remainder else 0)
+            for value in unique_values[cursor:cursor + chunk_size]:
+                bucket_of_value[value] = env_id
+            cursor += chunk_size
+        return bucket_of_value
 
     def _labels_from_batch(self, batch):
         labels = batch.y

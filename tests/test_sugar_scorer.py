@@ -34,14 +34,18 @@ from src.training.sugar_trainer import SuGARTrainer
 
 
 class SuGArScorerTests(unittest.TestCase):
-    def build_data(self, smiles, label):
+    def build_data(self, smiles, label, domain_id=None):
         example = build_molecule_example(
             smiles,
             label=label,
             molecule_id=f"scorer_{label}",
+            environment_or_group=domain_id,
             fragmenter=build_fragmenter("group_graph"),
         )
-        return molecule_example_to_data(example)
+        data = molecule_example_to_data(example)
+        if domain_id is not None:
+            data.metadata = {"domain_id": domain_id}
+        return data
 
     def _make_view(self, batch, **kwargs):
         defaults = dict(
@@ -251,6 +255,52 @@ class SuGArScorerTests(unittest.TestCase):
 
         trainer = SuGARTrainer([view], lambda_irm=1.0, num_envs=2)
         self.assertTrue(trainer.uses_irm())
+
+    def test_env_split_key_groups_by_domain_id(self):
+        """Examples sharing a domain_id land in the same IRM environment."""
+        data_list = [
+            self.build_data("CCOC(=O)C", 0, domain_id=10),
+            self.build_data("CCN(CC)CC", 1, domain_id=10),
+            self.build_data("CCCOC(=O)C", 0, domain_id=11),
+            self.build_data("CCCN(CC)CC", 1, domain_id=11),
+        ]
+        loader = DataLoader(data_list, batch_size=4, shuffle=False)
+
+        trainer = SuGARTrainer([], lambda_irm=1.0, num_envs=2, env_split_key="domain_id")
+        env_idx = trainer._make_env_idx(loader)
+
+        self.assertEqual(env_idx[0].item(), env_idx[1].item())
+        self.assertEqual(env_idx[2].item(), env_idx[3].item())
+        self.assertNotEqual(env_idx[0].item(), env_idx[2].item())
+
+    def test_env_split_key_falls_back_to_random_when_missing(self):
+        """Missing domain_id on any example falls back to a random split."""
+        data_list = [
+            self.build_data("CCOC(=O)C", 0),
+            self.build_data("CCN(CC)CC", 1),
+        ]
+        loader = DataLoader(data_list, batch_size=2, shuffle=False)
+
+        trainer = SuGARTrainer([], lambda_irm=1.0, num_envs=2, env_split_key="domain_id")
+        env_idx = trainer._make_env_idx(loader)
+
+        self.assertEqual(env_idx.shape[0], 2)
+        self.assertTrue(trainer._env_split_key_warned)
+
+    def test_env_split_key_disabled_uses_random_split(self):
+        """env_split_key=None preserves the original random-split behavior."""
+        torch.manual_seed(5)
+        data_list = [
+            self.build_data("CCOC(=O)C", 0, domain_id=10),
+            self.build_data("CCN(CC)CC", 1, domain_id=10),
+        ]
+        loader = DataLoader(data_list, batch_size=2, shuffle=False)
+
+        trainer = SuGARTrainer([], lambda_irm=1.0, num_envs=2, env_split_key=None)
+        env_idx = trainer._make_env_idx(loader)
+
+        self.assertEqual(env_idx.shape[0], 2)
+        self.assertFalse(trainer._env_split_key_warned)
 
 
 if __name__ == "__main__":
