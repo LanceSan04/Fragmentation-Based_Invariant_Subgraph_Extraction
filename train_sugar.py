@@ -247,6 +247,7 @@ def main(args):
         lambda_diversity=config.lambda_diversity,
         lambda_irm=config.lambda_irm,
         num_envs=config.num_envs,
+        env_split_key=config.get("env_split_key", "domain_id"),
         contrast_temperature=config.contrast_temperature,
         contrast_sampling=config.contrast_sampling,
         track_roc_auc=config.track_roc_auc,
@@ -366,6 +367,7 @@ if __name__ == "__main__":
     parser.add_argument("--lambda_diversity", type=float, default=None)
     parser.add_argument("--lambda_irm", type=float, default=None)
     parser.add_argument("--num_envs", type=int, default=None)
+    parser.add_argument("--env_split_key", type=str, default=None)
     parser.add_argument("--contrast_temperature", type=float, default=None)
     parser.add_argument(
         "--contrast_sampling", type=str, default=None, choices=["mul", "var", "cnc"]

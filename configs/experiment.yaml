@@ -161,8 +161,8 @@ debug_molecule_details: false
 # not. `seed` controls deterministic DataLoader shuffling/worker seeds, not the
 # FragmentCIGA sampler seeds below.
 batch_size: 128
-num_workers: 0
-pin_memory: false
+num_workers: 4
+pin_memory: true
 drop_last: false
 seed: 7
 
@@ -180,7 +180,7 @@ num_classes: 2
 gnn_layers: 3
 hidden_dim: 128
 edge_ratio: 0.25
-num_views: 10
+num_views: 5
 dropout: 0.1
 
 # Training-time random fragment-edge sampler inside each FragmentCIGA view.
@@ -194,7 +194,7 @@ sampler_seed: 7
 # Optimizer and training loop settings.
 # `device: cuda` automatically falls back to CPU when CUDA is unavailable.
 learning_rate: 0.001
-weight_decay: 0.0001
+weight_decay: 0.0005
 epochs: 40
 patience: 20
 device: cuda
@@ -203,7 +203,7 @@ device: cuda
 # Current save format is `{view_index: FragmentCIGA.state_dict()}` only. It does
 # not yet include optimizer state, config snapshot, selected greedy views, or
 # training history.
-save_model:
+save_model: checkpoints/sugar_model.pth
 
 # Per-epoch CSV with total loss, component losses, weighted auxiliary
 # contributions, validation metrics, and per-view validation diagnostics.
@@ -215,10 +215,19 @@ loss_log_path: logs/sugar_training_losses.csv
 # training. IRM is off by default because it only makes sense when a run has
 # meaningful environment partitions. It is only applied when lambda_irm > 0.0
 # and num_envs > 1.
-lambda_contrast: 1.0
-lambda_diversity: 1.0
-lambda_irm: 0.0
-num_envs: 1
+#
+# env_split_key selects which per-example key assigns IRM environments. It is
+# checked first against each example's `metadata` dict, then falls back to
+# `environment_or_group` (the field populated by `environment_key` above,
+# domain_id for this DrugOOD config). Unique key values are grouped into
+# num_envs buckets as evenly as possible (e.g. 21 unique domains with
+# num_envs: 2 gives group sizes 11/10); examples sharing a key value always
+# land in the same environment. Set to null/"" to use a random split instead.
+lambda_contrast: 0.5
+lambda_diversity: 4.0
+lambda_irm: 1.0
+num_envs: 3
+env_split_key: domain_id
 contrast_temperature: 1
 contrast_sampling: mul
 
