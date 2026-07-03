@@ -1,5 +1,36 @@
 #!/usr/bin/env python
-"""Consolidated CLI for preprocessing, training, checkpoints, and diagnostics."""
+"""Consolidated CLI for the REU SuGAr-style molecular pipeline.
+
+This entrypoint orchestrates preprocessing, FragmentCIGA/SuGAr training,
+checkpoint resume/evaluation, processed-data inspection, and diagnostics.
+Most experiment defaults come from configs/experiment.yaml; CLI flags override
+those defaults for a single run.
+
+Examples:
+    # Run the full pipeline: preprocess, train, and optional diagnostics
+    .\.venv\Scripts\python.exe main.py full --config configs\experiment.yaml --validate-loaders --fragment-diagnostics --loss-plots
+
+    # Preprocess the configured dataset and validate PyG loaders
+    .\.venv\Scripts\python.exe main.py preprocess --config configs\experiment.yaml --validate-loaders
+
+    # Short CPU smoke training run with checkpoint and loss CSV
+    .\.venv\Scripts\python.exe main.py train --config configs\experiment.yaml --epochs 1 --patience 1 --num-views 1 --hidden-dim 8 --gnn-layers 1 --batch-size 512 --device cpu --lambda-contrast 0 --lambda-diversity 0 --lambda-irm 0 --save-model checkpoints\smoke.pt --loss-log-path logs\smoke_losses.csv
+
+    # Evaluate a saved checkpoint without training
+    .\.venv\Scripts\python.exe main.py eval checkpoints\smoke.pt --splits ood_test iid_test --device cpu
+
+    # Resume training from a checkpoint
+    .\.venv\Scripts\python.exe main.py resume checkpoints\smoke.pt --epochs 5 --save-model checkpoints\resumed.pt
+
+    # Run fragmentation diagnostics
+    .\.venv\Scripts\python.exe main.py diagnostics fragments data\processed\drugood_lbap_core_ec50_assay\group_graph --splits train ood_val ood_test
+
+    # Plot loss logs
+    .\.venv\Scripts\python.exe main.py diagnostics losses logs\sugar_training_losses.csv
+
+    # Inspect one processed molecule record
+    .\.venv\Scripts\python.exe main.py inspect data\processed\drugood_lbap_core_ec50_assay\group_graph --splits train --index 0
+"""
 
 import argparse
 import json
