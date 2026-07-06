@@ -36,12 +36,22 @@ def invariant_risk_loss(causal_pred, labels, batch_env_idx, criterion=F.cross_en
     device = causal_pred.device
     env_ids = torch.unique(batch_env_idx)
 
+    # Only ``dummy_w`` needs a graph; the penalty is d(env_loss)/d(dummy_w), so
+    # ``causal_pred`` can be a detached constant. ``enable_grad`` lets this run
+    # inside a no_grad eval forward, and ``create_graph`` is kept only when the
+    # logits carry grad (training) — under no_grad eval the logits are detached,
+    # so we compute the penalty *value* without retaining a graph, which is what
+    # let the grad-enabled eval path exhaust CUDA memory across all views.
+    create_graph = causal_pred.requires_grad
     grads = []
-    for env_id in env_ids:
-        env_mask = batch_env_idx == env_id
-        dummy_w = torch.tensor(1.0, device=device).requires_grad_()
-        env_loss = criterion(causal_pred[env_mask] * dummy_w, labels[env_mask])
-        grads.append(torch.autograd.grad(env_loss, dummy_w, create_graph=True)[0])
+    with torch.enable_grad():
+        for env_id in env_ids:
+            env_mask = batch_env_idx == env_id
+            dummy_w = torch.ones((), device=device, requires_grad=True)
+            env_loss = criterion(causal_pred[env_mask] * dummy_w, labels[env_mask])
+            grads.append(
+                torch.autograd.grad(env_loss, dummy_w, create_graph=create_graph)[0]
+            )
 
     if len(grads) < 2:
         return torch.tensor(0.0, device=device)

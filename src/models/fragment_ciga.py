@@ -174,6 +174,10 @@ class FragmentCIGA(nn.Module):
             return predictions, {
                 "embeddings": h_graph,
                 "fragment_scores": edge_scores,
+                "fragment_edge_batch": edge_batch,
+                "fragment_edge_eligible": eligible_mask.to(
+                    device=edge_scores.device, dtype=torch.bool
+                ),
                 "logits": logits,
             }
         return predictions
