@@ -137,8 +137,19 @@ class SuGARTrainer:
             components["contrastive_loss_weighted"] = self.lambda_contrast * contrastive
 
         if self.lambda_diversity > 0 and len(self.views) > 1:
+            # All views score the same fragment graph, so the edge->molecule map
+            # is shared; take it from any view. edge_batch makes the cosine
+            # per-molecule; eligible_masks restricts each view pair to edges both
+            # actually scored, dropping the sampler's zero-fill artifact (a no-op
+            # at eval, where the sampler is off and all edges are eligible).
+            eligible_masks = [pv.get("fragment_edge_eligible") for pv in per_view]
+            if any(m is None for m in eligible_masks):
+                eligible_masks = None
             diversity = pairwise_diversity_loss(
-                [pv["fragment_scores"] for pv in per_view]
+                [pv["fragment_scores"] for pv in per_view],
+                edge_batch=per_view[0].get("fragment_edge_batch"),
+                eligible_masks=eligible_masks,
+                num_graphs=labels.size(0),
             )
             components["diversity_loss"] = diversity
             components["diversity_loss_weighted"] = self.lambda_diversity * diversity
@@ -387,7 +398,11 @@ class SuGARTrainer:
             batch = batch.to(self.device)
             labels = self._labels_from_batch(batch)
 
-            with torch.set_grad_enabled(use_irm):
+            # Eval never backprops: run the whole forward grad-free so the GAT
+            # activations for all views aren't retained (the OOM source). IRM's
+            # penalty is still computed as a reported value — it re-enables grad
+            # internally only around its tiny dummy scalar, on detached logits.
+            with torch.no_grad():
                 per_view = self._forward_views(batch, use_aux)
                 batch_env = None
                 if use_env:
