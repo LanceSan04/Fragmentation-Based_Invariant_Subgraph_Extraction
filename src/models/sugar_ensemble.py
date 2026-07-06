@@ -58,21 +58,17 @@ class SuGAREnsemble:
             return stacked.mean(dim=0)
         return stacked.max(dim=0).values
 
-    def __call__(self, batch_data, view_indices=None):
-        """Ensemble inference: aggregate masker scores → shared subgraph → soft vote.
+    def _aggregate_subgraph(self, batch_data, views):
+        """Stage 1+2: per-view fragment edge scores → one shared aggregated subgraph.
 
         Args:
             batch_data: Batched MoleculeData
-            view_indices: Optional list of view indices to use. Defaults to all views.
-                Used by greedy_view_selection to evaluate view subsets.
+            views: List of FragmentCIGA views to aggregate over.
 
         Returns:
-            predictions: [batch_size, num_classes] log-probabilities
+            atom_batch: batched ReconstructedAtomData for the shared subgraph.
+            agg_weights: [num_fragment_edges] aggregated soft edge scores.
         """
-        views = [self.views[i] for i in view_indices] if view_indices is not None else self.views
-        if not views:
-            raise ValueError("view_indices must contain at least one view")
-
         device = batch_data.x.device
         fragment_batch = build_fragment_graph_batch(batch_data).to(device)
 
@@ -108,6 +104,25 @@ class SuGAREnsemble:
         atom_batch = reconstruct_batch(
             batch_data, bool_mask, selected_fragment_edge_weight=agg_weights
         ).to(device)
+        return atom_batch, agg_weights
+
+    def __call__(self, batch_data, view_indices=None):
+        """Ensemble inference: aggregate masker scores → shared subgraph → soft vote.
+
+        Args:
+            batch_data: Batched MoleculeData
+            view_indices: Optional list of view indices to use. Defaults to all views.
+                Used by greedy_view_selection to evaluate view subsets.
+
+        Returns:
+            predictions: [batch_size, num_classes] log-probabilities
+        """
+        views = [self.views[i] for i in view_indices] if view_indices is not None else self.views
+        if not views:
+            raise ValueError("view_indices must contain at least one view")
+
+        # Stage 1+2: per-view scoring → shared aggregated subgraph
+        atom_batch, _ = self._aggregate_subgraph(batch_data, views)
 
         # Stage 3: each classifier predicts on the shared subgraph; soft vote
         all_probs = []
@@ -129,3 +144,32 @@ class SuGAREnsemble:
             Batched reconstructed atom-level PyG Data
         """
         return self.views[view_idx].get_invariant_subgraph(batch_data)
+
+    def extract_subgraphs(self, batch_data, view_indices=None):
+        """Return each view's own subgraph plus the shared aggregated subgraph.
+
+        Args:
+            batch_data: Batched MoleculeData.
+            view_indices: Optional subset of view indices. Defaults to all views.
+
+        Returns:
+            dict with:
+              "per_view": list of batched ReconstructedAtomData, one per selected view
+                  (that view's own independent top-k selection, via
+                  get_invariant_subgraph).
+              "aggregated": batched ReconstructedAtomData — the shared subgraph Stage 3
+                  actually votes on (mean/max-aggregated scores across the selected
+                  views).
+              "aggregated_edge_scores": [num_fragment_edges] aggregated soft scores.
+        """
+        views = [self.views[i] for i in view_indices] if view_indices is not None else self.views
+        if not views:
+            raise ValueError("view_indices must contain at least one view")
+
+        per_view = [view.get_invariant_subgraph(batch_data) for view in views]
+        aggregated, agg_weights = self._aggregate_subgraph(batch_data, views)
+        return {
+            "per_view": per_view,
+            "aggregated": aggregated,
+            "aggregated_edge_scores": agg_weights,
+        }
