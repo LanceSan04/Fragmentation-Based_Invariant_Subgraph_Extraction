@@ -195,6 +195,7 @@ def build_trainer(config, views, device):
         contrast_sampling=config.contrast_sampling,
         track_roc_auc=config.track_roc_auc,
         loss_log_path=config.get("loss_log_path", "logs/sugar_training_losses.csv"),
+        aggregation_mode=config.get("aggregation_mode", config.get("aggregation", "mean")),
     )
 
 

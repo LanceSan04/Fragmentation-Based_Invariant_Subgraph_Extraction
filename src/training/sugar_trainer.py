@@ -12,6 +12,7 @@ from src.losses.prediction import prediction_loss
 from src.losses.supervised_contrastive import supervised_contrastive_loss
 from src.losses.diversity import pairwise_diversity_loss
 from src.losses.irm import invariant_risk_loss
+from src.models.sugar_ensemble import SuGAREnsemble
 
 try:
     from sklearn.metrics import roc_auc_score as _sklearn_roc_auc
@@ -43,6 +44,7 @@ class SuGARTrainer:
         contrast_sampling="mul",
         track_roc_auc=True,
         loss_log_path=None,
+        aggregation_mode="mean",
     ):
         """
         Args:
@@ -65,6 +67,10 @@ class SuGARTrainer:
             contrast_sampling: Contrastive sampling mode ('mul', 'var', 'cnc').
             track_roc_auc: If True, use ROC-AUC where available.
             loss_log_path: Optional CSV path for per-epoch diagnostics.
+            aggregation_mode: Score-aggregation mode ('mean' or 'max') for the
+                SuGAREnsemble used to score validation. Must match the mode used
+                for final test-time inference so best-epoch/early-stop selection
+                is made on the same shared-subgraph path.
         """
         self.views = [v.to(device) for v in views]
         self.device = device
@@ -82,6 +88,12 @@ class SuGARTrainer:
         self.contrast_sampling = contrast_sampling
         self.track_roc_auc = track_roc_auc and _SKLEARN_AVAILABLE
         self.loss_log_path = Path(loss_log_path) if loss_log_path else None
+        # Validation is scored through the same shared-subgraph aggregation +
+        # soft-vote path used at final test time. The ensemble holds references
+        # to the same view objects, so weight updates are reflected without any
+        # re-wrapping.
+        self.aggregation_mode = aggregation_mode
+        self.ensemble = SuGAREnsemble(self.views, aggregation_mode=aggregation_mode)
         if track_roc_auc and not _SKLEARN_AVAILABLE:
             print("Warning: scikit-learn not found; ROC-AUC tracking disabled.")
 
@@ -371,7 +383,15 @@ class SuGARTrainer:
         return avg_loss, accuracy
 
     def evaluate_all(self, eval_loader, return_loss_components=False):
-        """Single-pass evaluation returning per-view and ensemble metrics."""
+        """Single-pass evaluation returning per-view and ensemble metrics.
+
+        The ensemble ``accuracy``/``roc_auc`` are scored through the shared
+        top-k subgraph aggregation + soft-vote path (``self.ensemble``) — the
+        same path used at final test time — so best-epoch and early-stop
+        selection are made on the true inference path rather than on an average
+        of independent per-view predictions. Per-view metrics still come from
+        each view's own top-k subgraph, for diagnostics only.
+        """
         for view in self.views:
             view.eval()
 
@@ -408,6 +428,10 @@ class SuGARTrainer:
                 if use_env:
                     batch_env = batch.env_id.to(self.device)
                 loss, components, per_view_losses = self._compute_components(per_view, labels, batch_env)
+                # Shared-subgraph ensemble prediction: aggregate per-view edge
+                # scores → one shared top-k subgraph → soft-vote. This is the
+                # metric best-epoch/early-stop selection is made on.
+                ens_log_probs = self.ensemble(batch, view_indices=None)
 
             for i, (pv, pv_loss) in enumerate(zip(per_view, per_view_losses)):
                 preds = pv["predictions"]
@@ -418,17 +442,15 @@ class SuGARTrainer:
                     view_prob_chunks[i].append(preds.detach().exp().cpu())
                     view_label_chunks[i].append(labels.cpu())
 
-            avg_probs = torch.stack(
-                [pv["predictions"].detach().exp() for pv in per_view], dim=0
-            ).mean(dim=0)
-            correct += (avg_probs.argmax(dim=-1) == labels).sum().item()
+            ens_probs = ens_log_probs.detach().exp()
+            correct += (ens_probs.argmax(dim=-1) == labels).sum().item()
             total += labels.size(0)
             total_loss += float(loss.detach().item())
             for key, value in components.items():
                 component_totals[key] += float(value.detach().item())
             num_batches += 1
             if self.track_roc_auc:
-                prob_chunks.append(avg_probs.cpu())
+                prob_chunks.append(ens_probs.cpu())
                 label_chunks.append(labels.detach().cpu())
 
         per_view_metrics = []
@@ -515,8 +537,12 @@ class SuGARTrainer:
             history[f"train_{key}"] = []
             history[f"val_{key}"] = []
 
-        per_view_best_metric = [-float("inf")] * num_views
-        per_view_best_weights = [None] * num_views
+        # Best-epoch selection is made on the shared-subgraph ensemble metric
+        # (the true inference path), and all views are snapshotted together at
+        # that single epoch. Restoring each view from its own independently-best
+        # epoch would mix maskers the aggregated score vote never validated.
+        best_snapshot = None
+        best_snapshot_epoch = None
         best_val_metric = -float("inf")
         best_metric_label = "acc"
         patience_counter = 0
@@ -547,13 +573,9 @@ class SuGARTrainer:
                     val_loader,
                     return_loss_components=True,
                 )
-                for i, vm in enumerate(all_view_metrics):
+                for vm in all_view_metrics:
                     view_val_accs.append(vm["acc"])
                     view_val_aucs.append(vm["auc"])
-                    view_metric, _ = self._metric_for_selection(vm["acc"], vm["auc"])
-                    if view_metric > per_view_best_metric[i]:
-                        per_view_best_metric[i] = view_metric
-                        per_view_best_weights[i] = deepcopy(self.views[i].state_dict())
                 val_selection_metric, metric_label = self._metric_for_selection(val_acc, val_auc)
                 best_metric_label = metric_label
 
@@ -582,6 +604,9 @@ class SuGARTrainer:
                 if val_selection_metric > best_val_metric:
                     best_val_metric = val_selection_metric
                     patience_counter = 0
+                    if restore_best_weights:
+                        best_snapshot = [deepcopy(v.state_dict()) for v in self.views]
+                        best_snapshot_epoch = epoch + 1
                 else:
                     patience_counter += 1
 
@@ -628,16 +653,13 @@ class SuGARTrainer:
             if should_stop:
                 break
 
-        if restore_best_weights:
-            restored = 0
-            for i, weights in enumerate(per_view_best_weights):
-                if weights is not None:
-                    self.views[i].load_state_dict(weights)
-                    restored += 1
-            if restored:
-                print(
-                    f"Restored best per-view weights for {restored}/{num_views} views "
-                    f"(best val_{best_metric_label} = {best_val_metric:.4f})"
-                )
+        if restore_best_weights and best_snapshot is not None:
+            for view, weights in zip(self.views, best_snapshot):
+                view.load_state_dict(weights)
+            print(
+                f"Restored best joint snapshot from epoch {best_snapshot_epoch} "
+                f"across all {num_views} views "
+                f"(best ensemble val_{best_metric_label} = {best_val_metric:.4f})"
+            )
 
         return history
