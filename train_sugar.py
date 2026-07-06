@@ -190,6 +190,7 @@ def build_trainer(config, views, device):
         lambda_diversity=config.lambda_diversity,
         lambda_irm=config.lambda_irm,
         num_envs=config.num_envs,
+        env_split_key=config.get("env_split_key", "domain_id"),
         contrast_temperature=config.contrast_temperature,
         contrast_sampling=config.contrast_sampling,
         track_roc_auc=config.track_roc_auc,
@@ -405,8 +406,6 @@ def run_training(config, resume_from=None):
     if train_loader is None:
         raise ValueError(f"No training data found for split {train_split!r} in {config.processed_dir}")
 
-    strip_non_tensor_batch_fields(dataloaders)
-
     print("Building FragmentCIGA views...")
     feature_dims = checkpoint_feature_dims(checkpoint_payload) if checkpoint_payload is not None else {}
     if not feature_dims:
@@ -428,6 +427,11 @@ def run_training(config, resume_from=None):
         restored_opts = load_optimizer_state_dicts(trainer, checkpoint_payload)
         if restored_opts:
             print(f"  Restored optimizer state for {restored_opts} view(s)")
+
+    # Resolve IRM environment ids while metadata is still present, then strip
+    # the bulky non-tensor fields PyG should not collate during training.
+    trainer.prepare_irm_environments([train_loader, val_loader])
+    strip_non_tensor_batch_fields(dataloaders)
 
     if val_loader is None and validation_split is not None:
         print(f"Validation split {validation_split!r} was not found; training without validation.")

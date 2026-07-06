@@ -199,6 +199,20 @@ class SuGARTrainer:
                 return env_idx
         return torch.randint(0, self.num_envs, (len(loader.dataset),))
 
+    def prepare_irm_environments(self, loaders):
+        """Resolve and attach IRM env ids while metadata is still available.
+
+        Call this before any batch-field stripping so an ``env_split_key`` that
+        lives only in an example's ``metadata`` can still be read. Once the ids
+        are written onto the ``Data`` objects, stripping ``metadata`` is safe.
+        No-op unless IRM is active.
+        """
+        if not self.uses_irm():
+            return
+        for loader in loaders:
+            if loader is not None:
+                self._assign_env_ids(loader)
+
     def _assign_env_ids(self, loader):
         """Attach a per-example ``env_id`` tensor to each Data object in the loader.
 
@@ -206,12 +220,16 @@ class SuGARTrainer:
         individual ``Data`` records, so they batch and shuffle together with
         their molecules (via ``batch.env_id``). This is robust to the train
         loader's ``shuffle=True``, unlike slicing a dataset-ordered ``env_idx``
-        by ``step * batch_size``. Returns True if ids were assigned.
+        by ``step * batch_size``. If ids were already assigned (e.g. by
+        ``prepare_irm_environments`` before metadata was stripped), they are
+        reused rather than recomputed. Returns True if ids are present.
         """
+        dataset = loader.dataset
+        if len(dataset) and getattr(dataset[0], "env_id", None) is not None:
+            return True
         env_idx = self._make_env_idx(loader)
         if env_idx is None:
             return False
-        dataset = loader.dataset
         for i in range(len(dataset)):
             dataset[i].env_id = env_idx[i].view(1).long()
         return True
