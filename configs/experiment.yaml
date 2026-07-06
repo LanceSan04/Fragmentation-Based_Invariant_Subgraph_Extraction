@@ -200,7 +200,7 @@ follow_batch:
 num_classes: 2
 gnn_layers: 3
 hidden_dim: 128
-edge_ratio: 0.25
+edge_ratio: 0.5
 num_views: 5
 dropout: 0.1
 
@@ -232,7 +232,7 @@ device: cuda
 # loaded for evaluation/resume if the active config supplies the right model
 # architecture and feature dimensions.
 # save_model: checkpoints/{dataset}_{fragmentation}_{short_run_name}.pt
-save_model: checkpoints/drugood_lbap_core_ec50_assay_group_graph_baseline.pt
+save_model: checkpoints/drugood_lbap_core_ec50_assay_group_graph_test1.pt
 
 # Per-epoch CSV with total loss, component losses, weighted auxiliary
 # contributions, validation metrics, and per-view validation diagnostics.
@@ -281,10 +281,12 @@ track_roc_auc: true
 # keeps a view only if it improves validation AUC/accuracy. It is only
 # meaningful when num_views > 1.
 #
-# Caveat: current trainer validation averages independent FragmentCIGA view
-# predictions, while final SuGAREnsemble validation/test aggregates edge scores
-# into one shared subgraph. This validation-path mismatch should be addressed
-# before treating best-epoch selection as final paper-quality model selection.
+# Validation path: trainer validation now scores the ensemble through the same
+# shared-subgraph aggregation (this aggregation_mode) + soft-vote path used at
+# final test time. Best-epoch/early-stop selection restores a single joint
+# snapshot of all views from the epoch with the best ensemble validation metric,
+# and greedy_model_selection runs on that same SuGAREnsemble path — so training
+# selection and final evaluation are consistent.
 greedy_model_selection: true
 aggregation_mode: mean
 
