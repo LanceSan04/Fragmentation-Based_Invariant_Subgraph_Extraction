@@ -220,11 +220,6 @@ epochs: 40
 patience: 20
 device: cuda
 
-# Optional checkpoint path. Leave empty to skip saving.
-# Current save format is `{view_index: FragmentCIGA.state_dict()}` only. It does
-# not yet include optimizer state, config snapshot, selected greedy views, or
-# training history.
-save_model: checkpoints/sugar_model.pth
 # Optional checkpoint path. Leave empty to skip saving. When set, the trainer
 # writes a full checkpoint containing:
 #   - effective config snapshot;
@@ -244,6 +239,12 @@ save_model: checkpoints/drugood_lbap_core_ec50_assay_group_graph_baseline.pt
 # Leave empty to disable. You can plot it with:
 #   .\.venv\Scripts\python.exe main.py diagnostics losses logs\sugar_training_losses.csv
 loss_log_path: logs/sugar_training_losses.csv
+
+# Final evaluation JSON written after training. This stores the final ensemble
+# metrics for test_split/report_splits plus metadata such as dataset,
+# fragmentation, selected greedy views, checkpoint path, and feature dimensions.
+# Leave empty to skip writing the report.
+final_metrics_path: reports/final_eval_metrics.json
 
 # Auxiliary loss settings.
 # Contrastive and diversity losses are active by default for SuGAr-style

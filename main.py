@@ -65,6 +65,7 @@ COMMON_OVERRIDES = (
     "num_envs",
     "save_model",
     "loss_log_path",
+    "final_metrics_path",
     "train_split",
     "validation_split",
     "test_split",
@@ -277,6 +278,7 @@ def add_common_arguments(parser):
     parser.add_argument("--num-envs", dest="num_envs", type=int)
     parser.add_argument("--save-model", dest="save_model")
     parser.add_argument("--loss-log-path", dest="loss_log_path")
+    parser.add_argument("--final-metrics-path", dest="final_metrics_path")
     parser.add_argument("--train-split", dest="train_split")
     parser.add_argument("--validation-split", dest="validation_split")
     parser.add_argument("--test-split", dest="test_split")

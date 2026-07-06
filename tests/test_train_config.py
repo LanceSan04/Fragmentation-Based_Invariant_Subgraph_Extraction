@@ -6,6 +6,7 @@ Run this file from the repository root with:
 """
 
 import argparse
+import json
 import os.path as osp
 import tempfile
 import unittest
@@ -15,7 +16,12 @@ import torch
 from torch.optim import Adam
 
 from src.data.config_hash import preprocessing_config_hash
-from train_sugar import Config, build_shared_initialized_views, merge_config_and_cli
+from train_sugar import (
+    Config,
+    build_shared_initialized_views,
+    merge_config_and_cli,
+    write_final_metrics_report,
+)
 from src.training.checkpoint import (
     checkpoint_feature_dims,
     load_checkpoint,
@@ -205,6 +211,54 @@ class TrainConfigTests(unittest.TestCase):
         self.assertEqual(len(payload["view_state_dicts"]), 2)
         self.assertEqual(len(payload["optimizer_state_dicts"]), 2)
         self.assertEqual(checkpoint_feature_dims(payload), feature_dims)
+
+    def test_final_metrics_report_writes_metrics_and_metadata(self):
+        config = Config(
+            {
+                "dataset": "drugood_lbap_core_ec50_assay",
+                "fragmentation": "group_graph",
+                "processed_dir": "data/processed/drugood_lbap_core_ec50_assay/group_graph",
+                "train_split": "train",
+                "validation_split": "ood_val",
+                "test_split": "ood_test",
+                "report_splits": ["iid_test"],
+                "num_views": 2,
+                "aggregation_mode": "mean",
+                "save_model": "checkpoints/example.pt",
+                "loss_log_path": "logs/example.csv",
+            }
+        )
+        metrics = {
+            "ood_test": {"loss": 0.5, "acc": 0.75, "auc": 0.82},
+            "iid_test": {"loss": 0.4, "acc": 0.8, "auc": 0.9},
+        }
+        feature_dims = {
+            "atom_feature_dim": 133,
+            "fragment_feature_dim": 149,
+            "atom_edge_dim": 14,
+            "fragment_edge_dim": 14,
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = osp.join(tmp_dir, "final_eval_metrics.json")
+            write_final_metrics_report(
+                path,
+                config,
+                metrics,
+                selected_view_indices=[0, 1],
+                feature_dims=feature_dims,
+                epoch=3,
+            )
+            with open(path, "r", encoding="utf-8") as handle:
+                report = json.load(handle)
+
+        self.assertEqual(report["metrics"]["ood_test"]["auc"], 0.82)
+        self.assertEqual(report["metrics"]["iid_test"]["acc"], 0.8)
+        self.assertEqual(report["metadata"]["dataset"], "drugood_lbap_core_ec50_assay")
+        self.assertEqual(report["metadata"]["fragmentation"], "group_graph")
+        self.assertEqual(report["metadata"]["selected_view_indices"], [0, 1])
+        self.assertEqual(report["metadata"]["epoch"], 3)
+        self.assertEqual(report["feature_dims"], feature_dims)
 
     def test_checkpoint_loader_accepts_legacy_view_state_dict_payload(self):
         config = Config(

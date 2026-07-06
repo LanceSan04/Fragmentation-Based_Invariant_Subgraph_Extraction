@@ -15,6 +15,7 @@ Training flow:
 import torch
 import torch.nn.functional as F
 import argparse
+import json
 import yaml
 from pathlib import Path
 from copy import deepcopy
@@ -294,6 +295,90 @@ def _evaluate_ensemble(ensemble, loader, device, track_roc_auc=True, view_indice
     return avg_loss, accuracy, roc_auc
 
 
+def _json_safe(value):
+    """Convert common experiment objects to JSON-serializable values."""
+    if isinstance(value, torch.Tensor):
+        if value.numel() == 1:
+            return value.item()
+        return value.detach().cpu().tolist()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_safe(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def build_final_metrics_report(
+    config,
+    metrics,
+    *,
+    selected_view_indices=None,
+    feature_dims=None,
+    epoch=None,
+):
+    """Build the final evaluation report saved after training."""
+    metadata_keys = [
+        "dataset",
+        "fragmentation",
+        "processed_dir",
+        "train_split",
+        "validation_split",
+        "test_split",
+        "report_splits",
+        "num_views",
+        "aggregation_mode",
+        "track_roc_auc",
+        "greedy_model_selection",
+        "lambda_contrast",
+        "lambda_diversity",
+        "lambda_irm",
+        "num_envs",
+        "env_split_key",
+        "save_model",
+        "loss_log_path",
+    ]
+    metadata = {
+        key: config.get(key, None)
+        for key in metadata_keys
+        if config.get(key, None) is not None
+    }
+    metadata["selected_view_indices"] = selected_view_indices
+    metadata["epoch"] = epoch
+
+    return _json_safe(
+        {
+            "metadata": metadata,
+            "feature_dims": feature_dims or {},
+            "metrics": metrics or {},
+        }
+    )
+
+
+def write_final_metrics_report(
+    path,
+    config,
+    metrics,
+    *,
+    selected_view_indices=None,
+    feature_dims=None,
+    epoch=None,
+):
+    """Write final evaluation metrics plus run metadata to JSON."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    report = build_final_metrics_report(
+        config,
+        metrics,
+        selected_view_indices=selected_view_indices,
+        feature_dims=feature_dims,
+        epoch=epoch,
+    )
+    path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
 def run_training(config, resume_from=None):
     """Train FragmentCIGA views and optionally resume from a checkpoint."""
     checkpoint_payload = None
@@ -429,6 +514,17 @@ def run_training(config, resume_from=None):
             epoch=len(history.get("train_loss", [])),
         )
         print(f"Checkpoint saved to {model_path}")
+
+    if config.get("final_metrics_path", None):
+        final_metrics_path = write_final_metrics_report(
+            config.get("final_metrics_path"),
+            config,
+            metrics,
+            selected_view_indices=selected_views,
+            feature_dims=feature_dims,
+            epoch=len(history.get("train_loss", [])),
+        )
+        print(f"Final evaluation metrics saved to {final_metrics_path}")
 
     return {
         "history": history,
@@ -700,6 +796,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_model", type=str, default=None)
     parser.add_argument("--resume_from", type=str, default=None)
     parser.add_argument("--loss_log_path", type=str, default=None)
+    parser.add_argument("--final_metrics_path", type=str, default=None)
     parser.add_argument(
         "--track_roc_auc",
         type=lambda x: x.lower() not in ("0", "false", "no"),
