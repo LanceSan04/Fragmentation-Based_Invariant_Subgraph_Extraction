@@ -70,7 +70,23 @@ def pipe_series(rows, column):
     return series
 
 
-def plot_lines(plt, epochs, series, title, ylabel, output_path):
+def series_values(series):
+    values = []
+    for _, maybe_values in series:
+        if maybe_values is None:
+            continue
+        values.extend(value for value in maybe_values if value is not None)
+    return values
+
+
+def needs_symlog_scale(series, ratio_threshold=100.0):
+    values = [abs(value) for value in series_values(series) if value != 0]
+    if not values:
+        return False
+    return max(values) / min(values) >= ratio_threshold
+
+
+def plot_lines(plt, epochs, series, title, ylabel, output_path, yscale=None):
     fig, ax = plt.subplots(figsize=(8.5, 4.8))
     for label, values in series:
         if values is None:
@@ -79,11 +95,26 @@ def plot_lines(plt, epochs, series, title, ylabel, output_path):
     ax.set_title(title)
     ax.set_xlabel("epoch")
     ax.set_ylabel(ylabel)
+    if yscale == "symlog":
+        ax.set_yscale("symlog", linthresh=1e-3)
     ax.grid(alpha=0.25)
     ax.legend(fontsize="small")
     fig.tight_layout()
     fig.savefig(output_path, dpi=160)
     plt.close(fig)
+
+
+def plot_auxiliary_group(plt, epochs, series, title, ylabel, output_path):
+    """Plot combined auxiliary losses, using symlog when scales differ wildly."""
+    plot_lines(
+        plt,
+        epochs,
+        series,
+        title,
+        ylabel,
+        output_path,
+        yscale="symlog" if needs_symlog_scale(series) else None,
+    )
 
 
 def write_summary(rows, output_path):
@@ -148,41 +179,98 @@ def make_plots(rows, output_dir):
     )
     written.append(path)
 
+    weighted_auxiliary_series = [
+        ("train_contrastive_weighted", numeric_series(rows, "train_contrastive_loss_weighted")),
+        ("train_diversity_weighted", numeric_series(rows, "train_diversity_loss_weighted")),
+        ("train_irm_weighted", numeric_series(rows, "train_irm_loss_weighted")),
+        ("val_contrastive_weighted", numeric_series(rows, "val_contrastive_loss_weighted")),
+        ("val_diversity_weighted", numeric_series(rows, "val_diversity_loss_weighted")),
+        ("val_irm_weighted", numeric_series(rows, "val_irm_loss_weighted")),
+    ]
     path = output_dir / "weighted_auxiliary_losses.png"
-    plot_lines(
+    plot_auxiliary_group(
         plt,
         epochs,
-        [
-            ("train_contrastive_weighted", numeric_series(rows, "train_contrastive_loss_weighted")),
-            ("train_diversity_weighted", numeric_series(rows, "train_diversity_loss_weighted")),
-            ("train_irm_weighted", numeric_series(rows, "train_irm_loss_weighted")),
-            ("val_contrastive_weighted", numeric_series(rows, "val_contrastive_loss_weighted")),
-            ("val_diversity_weighted", numeric_series(rows, "val_diversity_loss_weighted")),
-            ("val_irm_weighted", numeric_series(rows, "val_irm_loss_weighted")),
-        ],
+        weighted_auxiliary_series,
         "Weighted Auxiliary Loss Contributions",
-        "weighted loss",
+        "weighted loss (symlog if needed)",
         path,
     )
     written.append(path)
 
+    raw_auxiliary_series = [
+        ("train_contrastive", numeric_series(rows, "train_contrastive_loss")),
+        ("train_diversity", numeric_series(rows, "train_diversity_loss")),
+        ("train_irm", numeric_series(rows, "train_irm_loss")),
+        ("val_contrastive", numeric_series(rows, "val_contrastive_loss")),
+        ("val_diversity", numeric_series(rows, "val_diversity_loss")),
+        ("val_irm", numeric_series(rows, "val_irm_loss")),
+    ]
     path = output_dir / "raw_auxiliary_losses.png"
-    plot_lines(
+    plot_auxiliary_group(
         plt,
         epochs,
-        [
-            ("train_contrastive", numeric_series(rows, "train_contrastive_loss")),
-            ("train_diversity", numeric_series(rows, "train_diversity_loss")),
-            ("train_irm", numeric_series(rows, "train_irm_loss")),
-            ("val_contrastive", numeric_series(rows, "val_contrastive_loss")),
-            ("val_diversity", numeric_series(rows, "val_diversity_loss")),
-            ("val_irm", numeric_series(rows, "val_irm_loss")),
-        ],
+        raw_auxiliary_series,
         "Raw Auxiliary Losses",
-        "raw loss",
+        "raw loss (symlog if needed)",
         path,
     )
     written.append(path)
+
+    auxiliary_specs = [
+        (
+            "contrastive_loss.png",
+            "Contrastive Loss",
+            [
+                ("train_contrastive", numeric_series(rows, "train_contrastive_loss")),
+                ("val_contrastive", numeric_series(rows, "val_contrastive_loss")),
+            ],
+        ),
+        (
+            "diversity_loss.png",
+            "Diversity Loss",
+            [
+                ("train_diversity", numeric_series(rows, "train_diversity_loss")),
+                ("val_diversity", numeric_series(rows, "val_diversity_loss")),
+            ],
+        ),
+        (
+            "irm_loss.png",
+            "IRM Loss",
+            [
+                ("train_irm", numeric_series(rows, "train_irm_loss")),
+                ("val_irm", numeric_series(rows, "val_irm_loss")),
+            ],
+        ),
+        (
+            "weighted_contrastive_loss.png",
+            "Weighted Contrastive Loss Contribution",
+            [
+                ("train_contrastive_weighted", numeric_series(rows, "train_contrastive_loss_weighted")),
+                ("val_contrastive_weighted", numeric_series(rows, "val_contrastive_loss_weighted")),
+            ],
+        ),
+        (
+            "weighted_diversity_loss.png",
+            "Weighted Diversity Loss Contribution",
+            [
+                ("train_diversity_weighted", numeric_series(rows, "train_diversity_loss_weighted")),
+                ("val_diversity_weighted", numeric_series(rows, "val_diversity_loss_weighted")),
+            ],
+        ),
+        (
+            "weighted_irm_loss.png",
+            "Weighted IRM Loss Contribution",
+            [
+                ("train_irm_weighted", numeric_series(rows, "train_irm_loss_weighted")),
+                ("val_irm_weighted", numeric_series(rows, "val_irm_loss_weighted")),
+            ],
+        ),
+    ]
+    for filename, title, series in auxiliary_specs:
+        path = output_dir / filename
+        plot_lines(plt, epochs, series, title, "loss", path)
+        written.append(path)
 
     path = output_dir / "accuracy_auc.png"
     plot_lines(

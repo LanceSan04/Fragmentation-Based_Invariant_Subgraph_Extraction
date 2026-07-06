@@ -49,6 +49,8 @@
 # will switch the last processed_dir path component to `recap` automatically.
 
 # Dataset identifier stored in each processed .pt file's metadata.
+# Accepted: any non-empty string. Use stable, path-safe names because this is
+# written into metadata and often used in report/checkpoint names.
 #
 # Smoke mode:
 #   dataset: smoke
@@ -61,6 +63,7 @@ dataset: drugood_lbap_core_ec50_assay
 # Representation/cache version.
 # Bump this if atom features, bond features, fragmentation rules, pooling, or
 # saved .pt structure change in a backward-incompatible way.
+# Accepted: string. Recommended format: "major.minor.patch".
 preprocess_version: "0.1.0"
 
 # Fragmentation method used during preprocessing.
@@ -69,6 +72,7 @@ preprocess_version: "0.1.0"
 #   brics: RDKit BRICS fragments for ablation/comparison.
 #   recap: RECAP-rule bond cuts projected onto the original molecule, preserving
 #     every atom for reconstruction/provenance.
+# Accepted: group_graph | brics | recap.
 fragmentation: group_graph
 
 # Fragment/supernode feature construction.
@@ -77,10 +81,13 @@ fragmentation: group_graph
 #     mean-pool raw atom features inside each fragment;
 #     mean-pool raw internal-bond features inside each fragment;
 #     append fragment size features.
+# Accepted: mean_atom_and_internal_bond.
 pooling: mean_atom_and_internal_bond
 
 # Fixed dimensions from the copied Group Graph encoders.
 # Current fragment vectors are 149 dims: 133 atom + 14 bond + 2 size features.
+# Accepted: positive integers. Do not change unless the featurizers/pooler
+# change and preprocessed .pt files are regenerated.
 atom_feature_dim: 133
 bond_feature_dim: 14
 fragment_feature_dim: 149
@@ -110,6 +117,8 @@ processed_dir: data/processed/drugood_lbap_core_ec50_assay/group_graph
 # Supported file types:
 #   .csv, .tsv, .json, .jsonl
 #
+# raw_format accepted: infer from extension when empty, or drugood_json for
+# native DrugOOD split dictionaries.
 raw_path: data/raw/drugood/lbap_core_ec50_assay.json
 raw_format: drugood_json
 
@@ -166,10 +175,14 @@ report_splits:
 # Error handling.
 # Smoke tests can use true so failures are loud. Real datasets often contain
 # a few invalid/unparseable SMILES, so false skips bad rows and reports counts.
+# Accepted: true | false.
 strict: false
 
 # Progress logging for preprocess.py.
 # This is intentionally YAML-only; there is no CLI debug flag.
+# debug accepted: true | false.
+# debug_record_interval accepted: positive integer. Try 100-1000 for real data.
+# debug_molecule_details accepted: true | false. Usually false for large runs.
 debug: true
 debug_record_interval: 250
 debug_molecule_details: false
@@ -178,6 +191,13 @@ debug_molecule_details: false
 # The loader named by train_split shuffles automatically; all other splits do
 # not. `seed` controls deterministic DataLoader shuffling/worker seeds, not the
 # FragmentCIGA sampler seeds below.
+# batch_size accepted: positive integer. Practical range: 32-512, depending on
+# memory; 128 is a reasonable default.
+# num_workers accepted: integer >= 0. Practical range on Windows: 0-4; use 0 if
+# multiprocessing/data loading behaves strangely.
+# pin_memory accepted: true | false. Most useful with CUDA.
+# drop_last accepted: true | false. Usually false for molecular datasets.
+# seed accepted: integer or empty/null.
 batch_size: 128
 num_workers: 4
 pin_memory: true
@@ -197,6 +217,14 @@ follow_batch:
 # evaluating a checkpoint, architecture-defining fields such as num_views,
 # gnn_layers, hidden_dim, edge_ratio, dropout, sampler_seed, and aggregation_mode
 # come from the checkpoint so the saved weights can be reconstructed correctly.
+# num_classes accepted: integer >= 2. Binary DrugOOD uses 2.
+# gnn_layers accepted: positive integer. Practical range: 1-5; try 2-4.
+# hidden_dim accepted: positive integer. Practical range: 32-256; try 64, 128, 256.
+# edge_ratio accepted: float in (0, 1]. Practical range: 0.1-0.6; lower selects
+# a smaller invariant subgraph.
+# num_views accepted: positive integer. Practical range: 1-5 for local runs;
+# larger costs more memory/time.
+# dropout accepted: float in [0, 1). Practical range: 0.0-0.3.
 num_classes: 2
 gnn_layers: 3
 hidden_dim: 128
@@ -209,11 +237,23 @@ dropout: 0.1
 # random fragment-edge dropping during training only. Evaluation mode keeps the
 # full fragment graph. Each view gets sampler_seed + view_index so views start
 # from shared weights but see different stochastic edge drops.
+# fragment_sample_ratio accepted: float in (0, 1]. Practical range: 0.8-1.0;
+# 1.0 disables training-time fragment-edge dropping.
+# sampler_seed accepted: integer or empty/null.
 fragment_sample_ratio: 0.95
 sampler_seed: 7
 
 # Optimizer and training loop settings.
 # `device: cuda` automatically falls back to CPU when CUDA is unavailable.
+# learning_rate accepted: positive float. Practical range: 1e-4 to 1e-3; try
+# 0.001, 0.0005, 0.0001.
+# weight_decay accepted: float >= 0. Practical range: 0 to 5e-4; try 0, 1e-5,
+# 5e-4.
+# epochs accepted: positive integer. Practical range: 1-5 for smoke, 20-100 for
+# real experiments.
+# patience accepted: positive integer. Practical range: 5-30; should usually be
+# smaller than epochs.
+# device accepted: cuda | cpu. cuda falls back to cpu if unavailable.
 learning_rate: 0.001
 weight_decay: 0.0005
 epochs: 40
@@ -247,10 +287,13 @@ loss_log_path: logs/sugar_training_losses.csv
 final_metrics_path: reports/final_eval_metrics.json
 
 # Auxiliary loss settings.
-# Contrastive and diversity losses are active by default for SuGAr-style
-# training. IRM is off by default because it only makes sense when a run has
-# meaningful environment partitions. It is only applied when lambda_irm > 0.0
-# and num_envs > 1.
+# Prediction-only baseline is active below: contrastive, diversity, and IRM
+# weights are all zero. This is the clean control run for comparing whether
+# SuGAr-style auxiliary objectives actually improve OOD validation/test AUC.
+# Re-enable auxiliary losses in a separate run after this baseline is recorded.
+#
+# IRM only makes sense when a run has meaningful environment partitions. It is
+# applied only when lambda_irm > 0.0 and num_envs > 1.
 #
 # env_split_key selects which per-example key assigns IRM environments. It is
 # checked first against each example's `metadata` dict, then falls back to
@@ -259,17 +302,28 @@ final_metrics_path: reports/final_eval_metrics.json
 # num_envs buckets as evenly as possible (e.g. 21 unique domains with
 # num_envs: 2 gives group sizes 11/10); examples sharing a key value always
 # land in the same environment. Set to null/"" to use a random split instead.
-lambda_contrast: 0.5
-lambda_diversity: 4.0
-lambda_irm: 1.0
-num_envs: 3
-env_split_key: domain_id
+# lambda_contrast/lambda_diversity/lambda_irm accepted: float >= 0. Practical
+# tuning ranges:
+#   lambda_contrast: 0.0, 0.1, 0.5, 1.0
+#   lambda_diversity: 0.0, 1.0, 2.0, 4.0
+#   lambda_irm: 0.0, 0.1, 0.5, 1.0 after environment alignment is validated
+# num_envs accepted: positive integer. Use 1 when IRM is disabled; try 2-5 for
+# bucketed DrugOOD-domain IRM experiments.
+# env_split_key accepted: metadata key string such as domain_id, or empty/null.
+# contrast_temperature accepted: positive float. Practical range: 0.1-1.0.
+# contrast_sampling accepted: mul | var | cnc.
+lambda_contrast: 0.0
+lambda_diversity: 0.0
+lambda_irm: 0.0
+num_envs: 1
+env_split_key:
 contrast_temperature: 1
 contrast_sampling: mul
 
 # When true and scikit-learn is installed, validation/model selection prefers
 # ROC-AUC and falls back to accuracy if AUC is unavailable, such as a split with
 # only one class.
+# Accepted: true | false.
 track_roc_auc: true
 
 # Post-training ensemble behavior.
@@ -285,6 +339,8 @@ track_roc_auc: true
 # predictions, while final SuGAREnsemble validation/test aggregates edge scores
 # into one shared subgraph. This validation-path mismatch should be addressed
 # before treating best-epoch selection as final paper-quality model selection.
+# greedy_model_selection accepted: true | false.
+# aggregation_mode accepted: mean | max.
 greedy_model_selection: true
 aggregation_mode: mean
 
