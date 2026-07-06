@@ -199,6 +199,23 @@ class SuGARTrainer:
                 return env_idx
         return torch.randint(0, self.num_envs, (len(loader.dataset),))
 
+    def _assign_env_ids(self, loader):
+        """Attach a per-example ``env_id`` tensor to each Data object in the loader.
+
+        Environment ids are computed in dataset order but written onto the
+        individual ``Data`` records, so they batch and shuffle together with
+        their molecules (via ``batch.env_id``). This is robust to the train
+        loader's ``shuffle=True``, unlike slicing a dataset-ordered ``env_idx``
+        by ``step * batch_size``. Returns True if ids were assigned.
+        """
+        env_idx = self._make_env_idx(loader)
+        if env_idx is None:
+            return False
+        dataset = loader.dataset
+        for i in range(len(dataset)):
+            dataset[i].env_id = env_idx[i].view(1).long()
+        return True
+
     def _env_idx_from_key(self, dataset):
         """Group examples into num_envs buckets keyed by env_split_key, or None if absent."""
         values = [self._extract_env_value(data, self.env_split_key) for data in dataset]
@@ -273,7 +290,7 @@ class SuGARTrainer:
 
         use_irm = self.uses_irm()
         use_aux = self.lambda_contrast > 0 or self.lambda_diversity > 0 or use_irm
-        env_idx = self._make_env_idx(train_loader)
+        use_env = self._assign_env_ids(train_loader) if use_irm else False
 
         pbar = tqdm(train_loader, desc="Training")
         for step, batch in enumerate(pbar):
@@ -282,10 +299,8 @@ class SuGARTrainer:
             per_view = self._forward_views(batch, use_aux)
 
             batch_env = None
-            if use_irm:
-                batch_size = labels.size(0)
-                start = step * train_loader.batch_size
-                batch_env = env_idx[start: start + batch_size].to(self.device)
+            if use_env:
+                batch_env = batch.env_id.to(self.device)
 
             loss, components, _ = self._compute_components(per_view, labels, batch_env)
 
@@ -334,7 +349,7 @@ class SuGARTrainer:
         use_irm = self.uses_irm()
         use_aux = self.lambda_contrast > 0 or self.lambda_diversity > 0 or use_irm
         num_views = len(self.views)
-        env_idx = self._make_env_idx(eval_loader)
+        use_env = self._assign_env_ids(eval_loader) if use_irm else False
 
         view_correct = [0] * num_views
         view_total = [0] * num_views
@@ -357,10 +372,8 @@ class SuGARTrainer:
             with torch.set_grad_enabled(use_irm):
                 per_view = self._forward_views(batch, use_aux)
                 batch_env = None
-                if use_irm:
-                    batch_size = labels.size(0)
-                    start = step * eval_loader.batch_size
-                    batch_env = env_idx[start: start + batch_size].to(self.device)
+                if use_env:
+                    batch_env = batch.env_id.to(self.device)
                 loss, components, per_view_losses = self._compute_components(per_view, labels, batch_env)
 
             for i, (pv, pv_loss) in enumerate(zip(per_view, per_view_losses)):
