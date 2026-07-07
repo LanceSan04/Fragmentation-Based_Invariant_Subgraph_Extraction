@@ -34,8 +34,10 @@ Example reusing a training config for both paths:
 """
 
 import argparse
+import csv
 import io
 import sys
+from collections import Counter
 from pathlib import Path
 
 import networkx as nx
@@ -167,6 +169,8 @@ def collect_subgraph_records(ensemble, loader, device, num_samples=None):
             agg_edge_ids = _id_list(getattr(agg_sub, "selected_fragment_edge_ids", None))
             agg_frag_ids = _id_list(getattr(agg_sub, "selected_fragment_ids", None))
             atom_to_fragment = _int_list(getattr(full, "atom_to_fragment", None))
+            fragment_signatures = _fragment_signatures(full)
+            label = _label_value(getattr(full, "y", None))
 
             agreement = pairwise_view_agreement(per_view_atoms)
 
@@ -174,6 +178,7 @@ def collect_subgraph_records(ensemble, loader, device, num_samples=None):
                 "molecule_idx": len(records),
                 "molecule_id": _scalar(getattr(full, "molecule_id", None)),
                 "smiles": _scalar(getattr(full, "smiles", None)),
+                "label": label,
                 "mean_view_agreement": round(_offdiag_mean(agreement), 4),
             }
 
@@ -187,6 +192,7 @@ def collect_subgraph_records(ensemble, loader, device, num_samples=None):
                     "agg_atoms": agg_atoms,
                     "agreement": agreement,
                     "num_fragments": num_fragments,
+                    "fragment_signatures": fragment_signatures,
                     "fragment_edges": fragment_edges,
                     "per_view_edge_ids": per_view_edge_ids,
                     "per_view_frag_ids": per_view_frag_ids,
@@ -230,6 +236,46 @@ def _edge_pairs(edge_index):
     return [(int(ei[0, k]), int(ei[1, k])) for k in range(ei.size(1))]
 
 
+def _label_value(value):
+    """Normalize a graph label into a compact string for grouped metrics."""
+    if value is None:
+        return "unknown"
+    if isinstance(value, torch.Tensor):
+        if value.numel() == 0:
+            return "unknown"
+        value = value.reshape(-1)[0].item()
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _fragment_signatures(full_data):
+    """Return stable fragment identity tuples aligned to fragment ids.
+
+    The first implementation uses the metadata already preserved by preprocessing:
+    ``(fragment_type, fragment_smiles)``. This is specific enough to distinguish
+    Group Graph split fragments from ordinary fragments while still aggregating
+    the same chemistry across molecules.
+    """
+    num_fragments = _num_fragments(full_data)
+    fragment_types = list(getattr(full_data, "fragment_types", None) or [])
+    fragment_smiles = list(getattr(full_data, "fragment_smiles", None) or [])
+    signatures = []
+    for fragment_id in range(num_fragments):
+        fragment_type = (
+            str(fragment_types[fragment_id])
+            if fragment_id < len(fragment_types)
+            else "unknown"
+        )
+        fragment_smiles_value = (
+            str(fragment_smiles[fragment_id])
+            if fragment_id < len(fragment_smiles)
+            else f"fragment_{fragment_id}"
+        )
+        signatures.append((fragment_type, fragment_smiles_value))
+    return signatures
+
+
 def _num_fragments(full_data):
     """Number of fragments in a molecule (rows of fragment_x_static)."""
     frag_x = getattr(full_data, "fragment_x_static", None)
@@ -255,6 +301,176 @@ def _offdiag_mean(matrix):
         return 1.0
     total = sum(matrix[i][j] for i in range(n) for j in range(n) if i != j)
     return total / (n * (n - 1))
+
+
+def _source_names(num_views):
+    return [f"view_{view_idx}" for view_idx in range(num_views)] + [
+        "any_view",
+        "aggregated",
+    ]
+
+
+def _selected_ids_by_source(record, selected_key):
+    """Return selected fragment/edge ids grouped by view, any-view, and aggregate."""
+    per_view = record[selected_key]
+    by_source = {
+        f"view_{view_idx}": set(ids)
+        for view_idx, ids in enumerate(per_view)
+    }
+    any_view = set()
+    for ids in per_view:
+        any_view.update(ids)
+    by_source["any_view"] = any_view
+    aggregate_key = "agg_frag_ids" if selected_key == "per_view_frag_ids" else "agg_edge_ids"
+    by_source["aggregated"] = set(record[aggregate_key])
+    return by_source
+
+
+def _canonical_fragment_pair(sig_a, sig_b):
+    """Return an order-independent pair of fragment signatures."""
+    return tuple(sorted((sig_a, sig_b)))
+
+
+def build_fragment_selection_metric_rows(records):
+    """Build label-aware fragment and fragment-pair selection metric rows.
+
+    Counts are occurrence-based: every fragment occurrence and every fragment-edge
+    occurrence contributes to availability. Selection counts are grouped by view,
+    any-view, and aggregated-subgraph source.
+    """
+    if not records:
+        return [], []
+
+    num_views = records[0]["num_views"]
+    sources = _source_names(num_views)
+    fragment_available = Counter()
+    fragment_selected = Counter()
+    edge_available = Counter()
+    edge_selected = Counter()
+
+    for record in records:
+        label = str(record["row"].get("label", "unknown"))
+        fragment_signatures = record["fragment_signatures"]
+
+        for fragment_id, signature in enumerate(fragment_signatures):
+            fragment_available[(label, signature)] += 1
+
+        fragment_ids_by_source = _selected_ids_by_source(record, "per_view_frag_ids")
+        for source, selected_ids in fragment_ids_by_source.items():
+            for fragment_id in selected_ids:
+                if 0 <= fragment_id < len(fragment_signatures):
+                    fragment_selected[(source, label, fragment_signatures[fragment_id])] += 1
+
+        edge_signatures = []
+        for edge_id, (src, dst) in enumerate(record["fragment_edges"]):
+            if src >= len(fragment_signatures) or dst >= len(fragment_signatures):
+                continue
+            edge_signature = _canonical_fragment_pair(
+                fragment_signatures[src],
+                fragment_signatures[dst],
+            )
+            edge_signatures.append((edge_id, edge_signature))
+            edge_available[(label, edge_signature)] += 1
+
+        edge_ids_by_source = _selected_ids_by_source(record, "per_view_edge_ids")
+        edge_signature_by_id = dict(edge_signatures)
+        for source, selected_ids in edge_ids_by_source.items():
+            for edge_id in selected_ids:
+                edge_signature = edge_signature_by_id.get(edge_id)
+                if edge_signature is not None:
+                    edge_selected[(source, label, edge_signature)] += 1
+
+    fragment_rows = []
+    for label, signature in sorted(fragment_available):
+        available = fragment_available[(label, signature)]
+        fragment_type, fragment_smiles = signature
+        for source in sources:
+            selected = fragment_selected[(source, label, signature)]
+            fragment_rows.append(
+                {
+                    "label": label,
+                    "selection_source": source,
+                    "fragment_type": fragment_type,
+                    "fragment_smiles": fragment_smiles,
+                    "available_count": available,
+                    "selected_count": selected,
+                    "selection_rate": _rate(selected, available),
+                }
+            )
+
+    edge_rows = []
+    for label, edge_signature in sorted(edge_available):
+        available = edge_available[(label, edge_signature)]
+        (type_a, smiles_a), (type_b, smiles_b) = edge_signature
+        for source in sources:
+            selected = edge_selected[(source, label, edge_signature)]
+            edge_rows.append(
+                {
+                    "label": label,
+                    "selection_source": source,
+                    "fragment_a_type": type_a,
+                    "fragment_a_smiles": smiles_a,
+                    "fragment_b_type": type_b,
+                    "fragment_b_smiles": smiles_b,
+                    "available_count": available,
+                    "selected_count": selected,
+                    "selection_rate": _rate(selected, available),
+                }
+            )
+
+    return fragment_rows, edge_rows
+
+
+def _rate(part, whole):
+    if whole <= 0:
+        return 0.0
+    return round(float(part) / float(whole), 6)
+
+
+def write_csv_rows(path, rows, fieldnames):
+    """Write rows even when empty so downstream scripts get stable headers."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
+
+
+def write_fragment_selection_metrics(records, output_dir):
+    """Write sparse vector/matrix-friendly fragment selection metrics."""
+    fragment_rows, edge_rows = build_fragment_selection_metric_rows(records)
+    fragment_path = write_csv_rows(
+        output_dir / "fragment_selection_metrics.csv",
+        fragment_rows,
+        [
+            "label",
+            "selection_source",
+            "fragment_type",
+            "fragment_smiles",
+            "available_count",
+            "selected_count",
+            "selection_rate",
+        ],
+    )
+    edge_path = write_csv_rows(
+        output_dir / "fragment_pair_selection_metrics.csv",
+        edge_rows,
+        [
+            "label",
+            "selection_source",
+            "fragment_a_type",
+            "fragment_a_smiles",
+            "fragment_b_type",
+            "fragment_b_smiles",
+            "available_count",
+            "selected_count",
+            "selection_rate",
+        ],
+    )
+    print(f"Wrote fragment selection metrics: {fragment_path}")
+    print(f"Wrote fragment-pair selection metrics: {edge_path}")
+    return fragment_path, edge_path
 
 
 def print_summary(records):
@@ -615,6 +831,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print_summary(records)
+    write_fragment_selection_metrics(records, output_dir)
     plot_agreement_heatmap(records, output_dir, num_views)
     visualize_molecules(records, output_dir, args.num_visualize)
     print(f"\nDone. Outputs in {output_dir}")

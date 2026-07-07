@@ -270,40 +270,47 @@ class DiversityLossTests(unittest.TestCase):
         views = self._make_views(1)
         views[0].train()
         _, interm = views[0](self.batch, return_intermediates=True)
-        loss = pairwise_diversity_loss([interm["fragment_scores"]])
+        loss = pairwise_diversity_loss(
+            [interm["fragment_scores"]],
+            edge_batch=interm["fragment_edge_batch"],
+            eligible_masks=[interm["fragment_edge_eligible"]],
+            num_graphs=self.batch.num_graphs,
+        )
         self.assertAlmostEqual(float(loss), 0.0)
 
     def test_multiview_diversity_loss_is_scalar_in_0_1(self):
         views = self._make_views(3)
         fragment_scores = []
+        eligible_masks = []
+        edge_batch = None
         for v in views:
             v.train()
             _, interm = v(self.batch, return_intermediates=True)
             fragment_scores.append(interm["fragment_scores"])
-        loss = pairwise_diversity_loss(fragment_scores)
+            eligible_masks.append(interm["fragment_edge_eligible"])
+            edge_batch = interm["fragment_edge_batch"]
+        loss = pairwise_diversity_loss(
+            fragment_scores,
+            edge_batch=edge_batch,
+            eligible_masks=eligible_masks,
+            num_graphs=self.batch.num_graphs,
+        )
         self.assertEqual(loss.shape, torch.Size([]))
-        self.assertGreaterEqual(float(loss), -1.0)
+        self.assertGreaterEqual(float(loss), 0.0)
         self.assertLessEqual(float(loss), 1.0)
 
-    def test_diversity_loss_backpropagates(self):
-        views = self._make_views(2)
-        fragment_scores = []
-        for v in views:
-            v.train()
-            _, interm = v(self.batch, return_intermediates=True)
-            fragment_scores.append(interm["fragment_scores"])
+    def test_diversity_loss_backpropagates_to_active_scores(self):
+        score_a = torch.tensor([0.1, 0.4, 0.9], requires_grad=True)
+        score_b = torch.tensor([0.3, 0.2, 0.6], requires_grad=True)
 
-        loss = pairwise_diversity_loss(fragment_scores)
-        for v in views:
-            v.zero_grad()
+        loss = pairwise_diversity_loss(
+            [score_a, score_b],
+            edge_batch=torch.tensor([0, 0, 0]),
+            num_graphs=1,
+        )
         loss.backward()
 
-        grad = sum(
-            float(p.grad.abs().sum())
-            for v in views
-            for p in v.fragment_masker.edge_att.parameters()
-            if p.grad is not None
-        )
+        grad = float(score_a.grad.abs().sum() + score_b.grad.abs().sum())
         self.assertGreater(grad, 0.0)
 
 
