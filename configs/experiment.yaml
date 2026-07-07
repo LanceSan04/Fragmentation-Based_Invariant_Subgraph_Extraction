@@ -310,13 +310,18 @@ final_metrics_path: reports/final_eval_metrics.json
 # num_envs accepted: positive integer. Use 1 when IRM is disabled; try 2-5 for
 # bucketed DrugOOD-domain IRM experiments.
 # env_split_key accepted: metadata key string such as domain_id, or empty/null.
+# env_bucket_strategy orders env_split_key domains before chunking them into
+# num_envs buckets. `value` sorts by the raw key value (arbitrary). `size`
+# sorts domains by per-domain mean molecule size (atom count) so environments
+# span a size gradient. Accepted: value | size.
 # contrast_temperature accepted: positive float. Practical range: 0.1-1.0.
 # contrast_sampling accepted: mul | var | cnc.
 lambda_contrast: 0.0
 lambda_diversity: 0.0
 lambda_irm: 0.0
 num_envs: 1
-env_split_key:
+env_split_key: domain_id
+env_bucket_strategy: size
 contrast_temperature: 1
 contrast_sampling: mul
 

@@ -40,6 +40,7 @@ class SuGARTrainer:
         lambda_irm=0.0,
         num_envs=1,
         env_split_key="domain_id",
+        env_bucket_strategy="value",
         contrast_temperature=0.5,
         contrast_sampling="mul",
         track_roc_auc=True,
@@ -63,6 +64,13 @@ class SuGARTrainer:
                 as possible; examples sharing a key value always land in the
                 same environment. Set to None/"" to use a random split
                 instead.
+            env_bucket_strategy: How env_split_key domains are ordered before
+                being chunked into num_envs buckets. ``"value"`` sorts by the
+                raw key value (arbitrary for a nuisance axis); ``"size"`` sorts
+                domains by their per-domain mean molecule size (atom count) so
+                environments span a size gradient — a classic molecular OOD
+                nuisance axis that, unlike prevalence bucketing, never collapses
+                an environment to a single class.
             contrast_temperature: Temperature for contrastive loss.
             contrast_sampling: Contrastive sampling mode ('mul', 'var', 'cnc').
             track_roc_auc: If True, use ROC-AUC where available.
@@ -83,6 +91,7 @@ class SuGARTrainer:
         self.lambda_irm = lambda_irm
         self.num_envs = num_envs
         self.env_split_key = env_split_key or None
+        self.env_bucket_strategy = env_bucket_strategy
         self._env_split_key_warned = False
         self.contrast_temperature = contrast_temperature
         self.contrast_sampling = contrast_sampling
@@ -268,7 +277,12 @@ class SuGARTrainer:
                 )
                 self._env_split_key_warned = True
             return None
-        bucket_of_value = self._assign_env_buckets(values, self.num_envs)
+        if self.env_bucket_strategy == "size":
+            bucket_of_value = self._assign_env_buckets_by_size(
+                dataset, values, self.num_envs
+            )
+        else:
+            bucket_of_value = self._assign_env_buckets(values, self.num_envs)
         return torch.tensor([bucket_of_value[v] for v in values], dtype=torch.long)
 
     @staticmethod
@@ -280,7 +294,25 @@ class SuGARTrainer:
         return getattr(data, "environment_or_group", None)
 
     @staticmethod
-    def _assign_env_buckets(values, num_envs):
+    def _chunk_into_buckets(ordered_unique_values, num_envs):
+        """Chunk an ordered list of unique values into num_envs even buckets.
+
+        Env 0 gets the first (smallest) values, the last env the largest. Bucket
+        sizes differ by at most one (earlier envs absorb the remainder).
+        """
+        base_size, remainder = divmod(len(ordered_unique_values), num_envs)
+
+        bucket_of_value = {}
+        cursor = 0
+        for env_id in range(num_envs):
+            chunk_size = base_size + (1 if env_id < remainder else 0)
+            for value in ordered_unique_values[cursor:cursor + chunk_size]:
+                bucket_of_value[value] = env_id
+            cursor += chunk_size
+        return bucket_of_value
+
+    @classmethod
+    def _assign_env_buckets(cls, values, num_envs):
         """Map each unique value to one of num_envs buckets, sized as evenly as possible."""
 
         def sort_key(value):
@@ -290,16 +322,48 @@ class SuGARTrainer:
                 return (1, str(value))
 
         unique_values = sorted(set(values), key=sort_key)
-        base_size, remainder = divmod(len(unique_values), num_envs)
+        return cls._chunk_into_buckets(unique_values, num_envs)
 
-        bucket_of_value = {}
-        cursor = 0
-        for env_id in range(num_envs):
-            chunk_size = base_size + (1 if env_id < remainder else 0)
-            for value in unique_values[cursor:cursor + chunk_size]:
-                bucket_of_value[value] = env_id
-            cursor += chunk_size
-        return bucket_of_value
+    @classmethod
+    def _assign_env_buckets_by_size(cls, dataset, values, num_envs):
+        """Map each unique domain to a bucket ordered by mean molecule size.
+
+        Accumulate the total and count of atom sizes per domain over the whole
+        dataset, then order unique domains by mean size (size_sum / count),
+        tie-breaking on the raw-value sort order for determinism, and chunk into
+        num_envs buckets (env 0 = smallest-molecule domains, last env = largest).
+        """
+        size_sum = {}
+        count = {}
+        for data, value in zip(dataset, values):
+            size_sum[value] = size_sum.get(value, 0.0) + cls._scalar_size(data)
+            count[value] = count.get(value, 0) + 1
+
+        def value_sort_key(value):
+            try:
+                return (0, float(value))
+            except (TypeError, ValueError):
+                return (1, str(value))
+
+        value_rank = {
+            value: rank
+            for rank, value in enumerate(sorted(size_sum, key=value_sort_key))
+        }
+
+        def mean_size(value):
+            n = count[value]
+            return size_sum[value] / n if n else 0.0
+
+        ordered = sorted(size_sum, key=lambda v: (mean_size(v), value_rank[v]))
+        return cls._chunk_into_buckets(ordered, num_envs)
+
+    @staticmethod
+    def _scalar_size(data):
+        """Atom count for a molecule Data object (0 if node features are absent)."""
+        x = getattr(data, "x", None)
+        if x is None:
+            return 0
+        return int(x.size(0))
 
     def _labels_from_batch(self, batch):
         labels = batch.y

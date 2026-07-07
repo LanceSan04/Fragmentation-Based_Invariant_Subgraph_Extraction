@@ -63,6 +63,7 @@ COMMON_OVERRIDES = (
     "lambda_diversity",
     "lambda_irm",
     "num_envs",
+    "env_bucket_strategy",
     "save_model",
     "loss_log_path",
     "final_metrics_path",
@@ -276,6 +277,11 @@ def add_common_arguments(parser):
     parser.add_argument("--lambda-diversity", dest="lambda_diversity", type=float)
     parser.add_argument("--lambda-irm", dest="lambda_irm", type=float)
     parser.add_argument("--num-envs", dest="num_envs", type=int)
+    parser.add_argument(
+        "--env-bucket-strategy",
+        dest="env_bucket_strategy",
+        choices=["value", "size"],
+    )
     parser.add_argument("--save-model", dest="save_model")
     parser.add_argument("--loss-log-path", dest="loss_log_path")
     parser.add_argument("--final-metrics-path", dest="final_metrics_path")

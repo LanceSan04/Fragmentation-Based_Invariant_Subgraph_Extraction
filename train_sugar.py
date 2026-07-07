@@ -191,6 +191,7 @@ def build_trainer(config, views, device):
         lambda_irm=config.lambda_irm,
         num_envs=config.num_envs,
         env_split_key=config.get("env_split_key", "domain_id"),
+        env_bucket_strategy=config.get("env_bucket_strategy", "value"),
         contrast_temperature=config.contrast_temperature,
         contrast_sampling=config.contrast_sampling,
         track_roc_auc=config.track_roc_auc,
@@ -338,6 +339,7 @@ def build_final_metrics_report(
         "lambda_irm",
         "num_envs",
         "env_split_key",
+        "env_bucket_strategy",
         "save_model",
         "loss_log_path",
     ]
@@ -673,6 +675,7 @@ def main(args):
         lambda_irm=config.lambda_irm,
         num_envs=config.num_envs,
         env_split_key=config.get("env_split_key", "domain_id"),
+        env_bucket_strategy=config.get("env_bucket_strategy", "value"),
         contrast_temperature=config.contrast_temperature,
         contrast_sampling=config.contrast_sampling,
         track_roc_auc=config.track_roc_auc,
@@ -793,6 +796,9 @@ if __name__ == "__main__":
     parser.add_argument("--lambda_irm", type=float, default=None)
     parser.add_argument("--num_envs", type=int, default=None)
     parser.add_argument("--env_split_key", type=str, default=None)
+    parser.add_argument(
+        "--env_bucket_strategy", type=str, default=None, choices=["value", "size"]
+    )
     parser.add_argument("--contrast_temperature", type=float, default=None)
     parser.add_argument(
         "--contrast_sampling", type=str, default=None, choices=["mul", "var", "cnc"]
