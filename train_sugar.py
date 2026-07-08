@@ -42,6 +42,7 @@ from src.training.checkpoint import (
     save_training_checkpoint,
     view_state_dicts_from_checkpoint,
 )
+from src.utils.run_outputs import prepare_run_outputs, write_run_manifest
 
 
 @dataclass
@@ -392,6 +393,8 @@ def run_training(config, resume_from=None):
         align_num_views_to_checkpoint(config, checkpoint_payload)
         print(f"Loaded checkpoint for resume: {resume_from}")
 
+    prepare_run_outputs(config, command_name="train")
+
     device = resolve_device(config)
     print(f"Using device: {device}")
 
@@ -532,6 +535,18 @@ def run_training(config, resume_from=None):
             epoch=len(history.get("train_loss", [])),
         )
         print(f"Final evaluation metrics saved to {final_metrics_path}")
+
+    manifest_path = write_run_manifest(
+        config,
+        command_name="train",
+        extra={
+            "metrics": metrics,
+            "selected_view_indices": selected_views,
+            "epoch": len(history.get("train_loss", [])),
+        },
+    )
+    if manifest_path:
+        print(f"Run manifest saved to {manifest_path}")
 
     return {
         "history": history,
@@ -808,6 +823,8 @@ if __name__ == "__main__":
     parser.add_argument("--resume_from", type=str, default=None)
     parser.add_argument("--loss_log_path", type=str, default=None)
     parser.add_argument("--final_metrics_path", type=str, default=None)
+    parser.add_argument("--output_root", type=str, default=None)
+    parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument(
         "--track_roc_auc",
         type=lambda x: x.lower() not in ("0", "false", "no"),

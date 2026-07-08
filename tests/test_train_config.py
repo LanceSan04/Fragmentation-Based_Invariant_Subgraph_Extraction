@@ -22,6 +22,7 @@ from train_sugar import (
     merge_config_and_cli,
     write_final_metrics_report,
 )
+from src.utils.run_outputs import prepare_run_outputs, write_run_manifest
 from src.training.checkpoint import (
     checkpoint_feature_dims,
     load_checkpoint,
@@ -259,6 +260,49 @@ class TrainConfigTests(unittest.TestCase):
         self.assertEqual(report["metadata"]["selected_view_indices"], [0, 1])
         self.assertEqual(report["metadata"]["epoch"], 3)
         self.assertEqual(report["feature_dims"], feature_dims)
+
+    def test_prepare_run_outputs_builds_consolidated_run_directory(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = Config(
+                {
+                    "dataset": "drugood_lbap_core_ec50_assay",
+                    "fragmentation": "brics",
+                    "processed_dir": "data/processed/drugood_lbap_core_ec50_assay/brics",
+                    "output_root": tmp_dir,
+                    "run_name": "unit_run",
+                }
+            )
+
+            run_dir = prepare_run_outputs(config, command_name="train")
+            manifest_path = write_run_manifest(
+                config,
+                command_name="train",
+                extra={"metrics": {"ood_test": {"auc": 0.75}}},
+            )
+
+            expected = osp.join(
+                tmp_dir,
+                "drugood_lbap_core_ec50_assay",
+                "brics",
+                "unit_run",
+            )
+            self.assertEqual(str(run_dir), expected)
+            self.assertEqual(config.save_model, osp.join(expected, "checkpoints", "best_model.pt"))
+            self.assertEqual(
+                config.loss_log_path,
+                osp.join(expected, "logs", "training_epoch_losses.csv"),
+            )
+            self.assertEqual(
+                config.final_metrics_path,
+                osp.join(expected, "reports", "final_evaluation_metrics.json"),
+            )
+            self.assertTrue(osp.exists(osp.join(expected, "config", "effective_config.yaml")))
+            self.assertTrue(osp.exists(manifest_path))
+            with open(manifest_path, "r", encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            self.assertEqual(manifest["dataset"], "drugood_lbap_core_ec50_assay")
+            self.assertEqual(manifest["fragmentation"], "brics")
+            self.assertEqual(manifest["metrics"]["ood_test"]["auc"], 0.75)
 
     def test_checkpoint_loader_accepts_legacy_view_state_dict_payload(self):
         config = Config(

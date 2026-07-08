@@ -10,6 +10,7 @@ such as ``train/iid_val/ood_val/iid_test/ood_test``.
 
 import os.path as osp
 import random
+from functools import partial
 
 import torch
 from torch_geometric.loader import DataLoader
@@ -36,6 +37,13 @@ class ProcessedMoleculeDataset:
 
     def __repr__(self):  # pragma: no cover
         return "{}({})".format(self.__class__.__name__, len(self))
+
+
+def seed_worker(worker_id, base_seed):
+    """Seed a DataLoader worker using a picklable module-level function."""
+    worker_seed = int(base_seed) + worker_id
+    random.seed(worker_seed)
+    torch.manual_seed(worker_seed)
 
 
 def load_processed_split(path, expected_metadata=None):
@@ -86,11 +94,7 @@ def build_dataloader(
     if seed is not None:
         generator = torch.Generator()
         generator.manual_seed(int(seed))
-
-        def worker_init_fn(worker_id):
-            worker_seed = int(seed) + worker_id
-            random.seed(worker_seed)
-            torch.manual_seed(worker_seed)
+        worker_init_fn = partial(seed_worker, base_seed=int(seed))
 
     return DataLoader(
         dataset,

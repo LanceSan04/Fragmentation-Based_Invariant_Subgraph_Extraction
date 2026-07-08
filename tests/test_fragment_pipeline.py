@@ -14,11 +14,12 @@ import tempfile
 import unittest
 import csv
 import json
+import pickle
 
 import torch
 from torch_geometric.data import Batch
 
-from src.data.dataloader import build_split_dataloaders, validate_dataloader_batch
+from src.data.dataloader import build_dataloader, build_split_dataloaders, validate_dataloader_batch
 from src.data.molecule_example import build_molecule_example
 from src.data.pyg_batch import molecule_example_to_data
 from src.data.preprocess import run_preprocessing
@@ -28,6 +29,7 @@ from src.models.atom_reconstructor import (
     reconstruct_batch,
     relabel_reconstructed_atoms,
 )
+from scripts.fragmentation_diagnostics import split_summary_rows
 
 
 class FragmentPipelineTests(unittest.TestCase):
@@ -75,6 +77,12 @@ class FragmentPipelineTests(unittest.TestCase):
                     restored.fragment_edge_to_attachment_atoms,
                 )
             )
+
+    def test_seeded_dataloader_worker_init_is_picklable_for_windows_spawn(self):
+        dataset = [self.build_data("CCOC(=O)C", "group_graph")]
+        loader = build_dataloader(dataset, batch_size=1, num_workers=1, seed=7)
+
+        pickle.dumps(loader.worker_init_fn)
 
     def test_all_fragment_edges_reconstruct_original_atom_graph(self):
         self.assert_all_fragment_edges_reconstruct_original_atom_graph("group_graph")
@@ -459,6 +467,51 @@ class FragmentPipelineTests(unittest.TestCase):
 
             self.assertEqual(len(reconstructed), 2)
             self.assertTrue(all(item.x.size(0) > 0 for item in reconstructed))
+
+    def test_fragmentation_split_summary_includes_single_fragment_percentages(self):
+        molecule_rows = [
+            self.fake_molecule_stat_row(single_fragment=True, zero_fragment_edges=True),
+            self.fake_molecule_stat_row(single_fragment=False, zero_fragment_edges=True),
+            self.fake_molecule_stat_row(single_fragment=False, zero_fragment_edges=False),
+            self.fake_molecule_stat_row(single_fragment=False, zero_fragment_edges=False),
+        ]
+        fragment_rows = [
+            {
+                "split": "train",
+                "fragment_type": "brics",
+                "fragment_smiles": "C",
+            }
+        ]
+
+        rows = split_summary_rows(molecule_rows, fragment_rows, top_k=5)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["single_fragment_molecules"], 1)
+        self.assertEqual(rows[0]["single_fragment_molecule_percent"], 25.0)
+        self.assertEqual(rows[0]["double_fragment_molecules"], 3)
+        self.assertEqual(rows[0]["double_fragment_molecule_percent"], 75.0)
+        self.assertEqual(rows[0]["zero_fragment_edge_molecules"], 2)
+        self.assertEqual(rows[0]["zero_fragment_edge_molecule_percent"], 50.0)
+
+    def fake_molecule_stat_row(self, single_fragment=False, zero_fragment_edges=False):
+        num_fragments = 1 if single_fragment else 2
+        num_fragment_edges = 0 if zero_fragment_edges else 1
+        return {
+            "dataset": "unit",
+            "fragmentation": "brics",
+            "split": "train",
+            "label": 1,
+            "environment_or_group": 7,
+            "num_atoms": 4,
+            "num_bonds": 3,
+            "num_fragments": num_fragments,
+            "num_fragment_edges": num_fragment_edges,
+            "fragment_edge_density": 0.0,
+            "mean_atoms_per_fragment": 2.0,
+            "mean_internal_bonds_per_fragment": 1.0,
+            "single_fragment": single_fragment,
+            "zero_fragment_edges": zero_fragment_edges,
+        }
 
     def assert_fragment_atoms_connected(self, data, atoms):
         atoms = set(int(atom_id) for atom_id in atoms.tolist())

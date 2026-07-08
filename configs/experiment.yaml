@@ -48,6 +48,32 @@
 # main.py with `--fragmentation recap` and do not pass `--processed-dir`, main.py
 # will switch the last processed_dir path component to `recap` automatically.
 
+# Consolidated run outputs.
+# When output_root is set, training/full/preprocess commands write run artifacts
+# under:
+#
+#   {output_root}/{dataset}/{fragmentation}/{run_name}/
+#
+# Use run_name: auto for a timestamped name such as:
+#
+#   drugood_lbap_core_ec50_assay__brics__train__20260708_120000
+#
+# Each run directory contains:
+#
+#   checkpoints/best_model.pt
+#   logs/training_epoch_losses.csv
+#   reports/final_evaluation_metrics.json
+#   reports/training_curves/
+#   reports/preprocessing_fragmentation_diagnostics/
+#   reports/subgraph_analysis/
+#   config/effective_config.yaml
+#   run_manifest.json
+#
+# Keep processed .pt files in data/processed/... because they are reusable
+# dataset artifacts, not one-off run outputs.
+output_root: outputs
+run_name: auto
+
 # Dataset identifier stored in each processed .pt file's metadata.
 # Accepted: any non-empty string. Use stable, path-safe names because this is
 # written into metadata and often used in report/checkpoint names.
@@ -271,20 +297,22 @@ device: cuda
 # Legacy checkpoints that only contain `{view_index: state_dict}` can still be
 # loaded for evaluation/resume if the active config supplies the right model
 # architecture and feature dimensions.
-# save_model: checkpoints/{dataset}_{fragmentation}_{short_run_name}.pt
-save_model: checkpoints/drugood_lbap_core_ec50_assay_brics_test1.pt
+# Leave these empty when output_root is active. The run directory will provide:
+#   checkpoints/best_model.pt
+save_model:
 
 # Per-epoch CSV with total loss, component losses, weighted auxiliary
 # contributions, validation metrics, and per-view validation diagnostics.
 # Leave empty to disable. You can plot it with:
-#   .\.venv\Scripts\python.exe main.py diagnostics losses logs\sugar_training_losses.csv
-loss_log_path: logs/sugar_training_losses.csv
+#   .\.venv\Scripts\python.exe main.py diagnostics losses outputs\...\logs\training_epoch_losses.csv
+loss_log_path:
 
 # Final evaluation JSON written after training. This stores the final ensemble
 # metrics for test_split/report_splits plus metadata such as dataset,
 # fragmentation, selected greedy views, checkpoint path, and feature dimensions.
-# Leave empty to skip writing the report.
-final_metrics_path: reports/final_eval_metrics.json
+# Leave empty when output_root is active. The run directory will provide:
+#   reports/final_evaluation_metrics.json
+final_metrics_path:
 
 # Auxiliary loss settings.
 # Prediction-only baseline is active below: contrastive, diversity, and IRM

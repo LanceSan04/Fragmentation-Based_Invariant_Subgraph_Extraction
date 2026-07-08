@@ -41,6 +41,7 @@ import yaml
 
 from src.data.dataloader import build_split_dataloaders, validate_dataloader_batch
 from train_sugar import Config, evaluate_checkpoint, run_training
+from src.utils.run_outputs import prepare_run_outputs, write_run_manifest
 
 
 ROOT = Path(__file__).resolve().parent
@@ -67,6 +68,8 @@ COMMON_OVERRIDES = (
     "save_model",
     "loss_log_path",
     "final_metrics_path",
+    "output_root",
+    "run_name",
     "train_split",
     "validation_split",
     "test_split",
@@ -88,6 +91,14 @@ def apply_common_overrides(config, args):
         value = getattr(args, key, None)
         if value is not None:
             merged[key] = value
+
+    explicit_output_paths = [
+        key
+        for key in ("save_model", "loss_log_path", "final_metrics_path")
+        if getattr(args, key, None) is not None
+    ]
+    if explicit_output_paths:
+        merged["_explicit_output_paths"] = explicit_output_paths
 
     if (
         getattr(args, "fragmentation", None)
@@ -130,9 +141,11 @@ def run_preprocess_command(args):
     from src.data.preprocess import run_preprocessing
 
     config = build_effective_config(args)
+    prepare_run_outputs(config, command_name="preprocess")
     result = run_preprocessing(config.to_dict())
     if args.validate_loaders:
         validate_loaders(config.processed_dir, config)
+    write_run_manifest(config, command_name="preprocess")
     return result
 
 
@@ -145,6 +158,7 @@ def run_full_command(args):
     from src.data.preprocess import run_preprocessing
 
     config = build_effective_config(args, checkpoint_path=getattr(args, "resume_from", None))
+    prepare_run_outputs(config, command_name="full")
     if not args.skip_preprocess:
         run_preprocessing(config.to_dict())
         if args.validate_loaders:
@@ -156,7 +170,13 @@ def run_full_command(args):
         run_fragment_diagnostics(
             processed_dir=Path(config.processed_dir),
             splits=args.diagnostic_splits or config.get("split_names", None),
-            output_dir=Path(args.fragment_diagnostics_output) if args.fragment_diagnostics_output else None,
+            output_dir=(
+                Path(args.fragment_diagnostics_output)
+                if args.fragment_diagnostics_output
+                else Path(config.get("fragmentation_diagnostics_dir"))
+                if config.get("fragmentation_diagnostics_dir", None)
+                else None
+            ),
             max_molecules=args.max_molecules,
             no_plots=args.no_plots,
             top_k=args.top_k,
@@ -165,10 +185,14 @@ def run_full_command(args):
     if args.loss_plots:
         loss_log = args.loss_log or config.get("loss_log_path", None)
         if loss_log:
-            run_loss_diagnostics(loss_log, args.loss_output_dir)
+            run_loss_diagnostics(
+                loss_log,
+                args.loss_output_dir or config.get("training_diagnostics_dir", None),
+            )
         else:
             print("No loss log path configured; skipping loss plots.")
 
+    write_run_manifest(config, command_name="full")
     return result
 
 
@@ -285,6 +309,8 @@ def add_common_arguments(parser):
     parser.add_argument("--save-model", dest="save_model")
     parser.add_argument("--loss-log-path", dest="loss_log_path")
     parser.add_argument("--final-metrics-path", dest="final_metrics_path")
+    parser.add_argument("--output-root", dest="output_root")
+    parser.add_argument("--run-name", dest="run_name")
     parser.add_argument("--train-split", dest="train_split")
     parser.add_argument("--validation-split", dest="validation_split")
     parser.add_argument("--test-split", dest="test_split")
@@ -335,7 +361,7 @@ def build_parser():
     full.add_argument("--no-plots", action="store_true")
     full.add_argument("--loss-plots", action="store_true")
     full.add_argument("--loss-log")
-    full.add_argument("--loss-output-dir", default="reports/training_diagnostics")
+    full.add_argument("--loss-output-dir")
     full.set_defaults(func=run_full_command)
 
     diagnostics = subparsers.add_parser("diagnostics", help="Run report/diagnostic helpers.")

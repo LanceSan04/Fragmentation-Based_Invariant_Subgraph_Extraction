@@ -40,7 +40,8 @@ CLI options:
     --num_visualize N
         Number of molecule visualization PNGs to write. Default: 3.
     --output_dir PATH
-        Output directory for CSVs and plots. Default: results/subgraph_analysis.
+        Output directory for CSVs and plots. Defaults to subgraph_analysis_dir
+        from config, then results/subgraph_analysis.
     --metric_min_available N
         Minimum available_count required for interpretation tables. Default: 10.
     --metric_top_k N
@@ -964,7 +965,7 @@ def parse_args():
     parser.add_argument("--split", type=str, default=None, help="Split to analyze (default: test)")
     parser.add_argument("--num_samples", type=int, default=None, help="Max molecules (default: all)")
     parser.add_argument("--num_visualize", type=int, default=3)
-    parser.add_argument("--output_dir", type=str, default="results/subgraph_analysis")
+    parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument(
         "--metric_min_available",
         type=int,
@@ -1016,7 +1017,11 @@ def main():
         return
 
     num_views = records[0]["num_views"]
-    output_dir = Path(args.output_dir)
+    output_dir = Path(
+        args.output_dir
+        or config.get("subgraph_analysis_dir", None)
+        or "results/subgraph_analysis"
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print_summary(records)

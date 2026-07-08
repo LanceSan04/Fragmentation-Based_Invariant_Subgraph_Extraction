@@ -187,6 +187,10 @@ def stdev(values):
     return math.sqrt(sum((value - avg) ** 2 for value in values) / (len(values) - 1))
 
 
+def percent(count, total):
+    return float((count / total) * 100.0) if total else 0.0
+
+
 def summarize_numeric(values):
     values = list(values)
     if not values:
@@ -218,6 +222,16 @@ def split_summary_rows(molecule_rows, fragment_rows_all, top_k):
     for split_name in sorted(by_split):
         rows_for_split = by_split[split_name]
         fragments = fragments_by_split[split_name]
+        num_molecules = len(rows_for_split)
+        single_fragment_molecules = sum(
+            bool(row["single_fragment"]) for row in rows_for_split
+        )
+        double_fragment_molecules = sum(
+            int(row["num_fragments"]) == 2 for row in rows_for_split
+        )
+        zero_fragment_edge_molecules = sum(
+            bool(row["zero_fragment_edges"]) for row in rows_for_split
+        )
         label_counts = Counter(str(row["label"]) for row in rows_for_split)
         domain_counts = Counter(str(row["environment_or_group"]) for row in rows_for_split)
         type_counts = Counter(row["fragment_type"] for row in fragments)
@@ -227,10 +241,23 @@ def split_summary_rows(molecule_rows, fragment_rows_all, top_k):
             "dataset": rows_for_split[0].get("dataset", ""),
             "fragmentation": rows_for_split[0].get("fragmentation", ""),
             "split": split_name,
-            "num_molecules": len(rows_for_split),
+            "num_molecules": num_molecules,
             "num_fragments_total": len(fragments),
-            "single_fragment_molecules": sum(bool(row["single_fragment"]) for row in rows_for_split),
-            "zero_fragment_edge_molecules": sum(bool(row["zero_fragment_edges"]) for row in rows_for_split),
+            "single_fragment_molecules": single_fragment_molecules,
+            "single_fragment_molecule_percent": percent(
+                single_fragment_molecules,
+                num_molecules,
+            ),
+            "double_fragment_molecules": double_fragment_molecules,
+            "double_fragment_molecule_percent": percent(
+                double_fragment_molecules,
+                num_molecules,
+            ),
+            "zero_fragment_edge_molecules": zero_fragment_edge_molecules,
+            "zero_fragment_edge_molecule_percent": percent(
+                zero_fragment_edge_molecules,
+                num_molecules,
+            ),
             "label_counts_json": json.dumps(dict(label_counts), sort_keys=True),
             "top_domains_json": json.dumps(dict(domain_counts.most_common(top_k)), sort_keys=True),
             "fragment_type_counts_json": json.dumps(dict(type_counts), sort_keys=True),
