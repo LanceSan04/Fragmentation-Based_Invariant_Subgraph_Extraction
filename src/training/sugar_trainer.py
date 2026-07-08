@@ -12,6 +12,7 @@ from src.losses.prediction import prediction_loss
 from src.losses.supervised_contrastive import supervised_contrastive_loss
 from src.losses.diversity import pairwise_diversity_loss
 from src.losses.irm import invariant_risk_loss
+from src.models.fragment_graph import build_fragment_graph_batch
 from src.models.sugar_ensemble import SuGAREnsemble
 
 try:
@@ -372,13 +373,17 @@ class SuGARTrainer:
         return labels.long()
 
     def _forward_views(self, batch, use_aux):
+        # The batched fragment graph is a pure function of the batch and identical
+        # across every view, so build it once and share it instead of having each
+        # view rebuild it inside its forward pass.
+        fragment_batch = build_fragment_graph_batch(batch).to(self.device)
         per_view = []
         for view in self.views:
             if use_aux:
-                pred, interm = view(batch, return_intermediates=True)
+                pred, interm = view(batch, return_intermediates=True, fragment_batch=fragment_batch)
                 per_view.append({"predictions": pred, **interm})
             else:
-                pred = view(batch)
+                pred = view(batch, fragment_batch=fragment_batch)
                 per_view.append({"predictions": pred})
         return per_view
 

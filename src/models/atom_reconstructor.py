@@ -321,3 +321,97 @@ def reconstruct_batch(batch, selected_fragment_edge_mask, selected_fragment_edge
         raise ValueError("selected_fragment_edge_mask has extra values after batch reconstruction")
 
     return Batch.from_data_list(reconstructed)
+
+
+def reconstruct_batch_fast(batch, selected_fragment_edge_mask, selected_fragment_edge_weight=None):
+    """Vectorized classifier-only atom-subgraph reconstruction for a batch.
+
+    Produces exactly the tensors :class:`AtomClassifier` consumes (``x``,
+    ``edge_index``, ``edge_attr``, ``edge_weight``, ``batch``) by operating on
+    the globally-offset batch tensors directly, avoiding the per-molecule
+    ``to_data_list`` / ``from_data_list`` round-trip in :func:`reconstruct_batch`.
+
+    The classifier (GATv2 + mean pool) is order-invariant over edges, so edges
+    are emitted in a different order than :func:`reconstruct_batch`, but ``x`` and
+    ``batch`` share the same molecule-major node order and ``edge_attr`` /
+    ``edge_weight`` stay aligned column-for-column with ``edge_index`` — giving
+    identical GNN output. Provenance fields (atom_ids, selected_fragment_ids, …)
+    are intentionally omitted; use :func:`reconstruct_batch` when those are needed
+    (analysis / visualization paths).
+    """
+    device = batch.x.device
+    mask = torch.as_tensor(selected_fragment_edge_mask, dtype=torch.bool, device=device)
+
+    frag_edge_index = batch.fragment_edge_index
+    if frag_edge_index.size(1) != mask.numel():
+        raise ValueError("selected_fragment_edge_mask must contain one value per fragment edge")
+
+    atom_to_fragment = batch.atom_to_fragment
+    frag_node_batch = batch.fragment_x_static_batch
+
+    # Molecules with no fragment edges keep all their fragments — matches the
+    # num_fragment_edges == 0 branch of reconstruct_atom_graph.
+    if getattr(batch, "ptr", None) is not None:
+        num_mols = batch.ptr.numel() - 1
+    else:
+        num_mols = int(batch.batch.max().item()) + 1 if batch.batch.numel() else 0
+    mol_has_edge = torch.zeros(num_mols, dtype=torch.bool, device=device)
+    if frag_edge_index.numel():
+        mol_has_edge[frag_node_batch[frag_edge_index[0]]] = True
+    edgeless_fragments = (~mol_has_edge[frag_node_batch]).nonzero(as_tuple=True)[0]
+
+    selected_endpoints = frag_edge_index[:, mask].reshape(-1)
+    selected_fragments = torch.unique(torch.cat([selected_endpoints, edgeless_fragments]))
+
+    selected_atom_mask = torch.isin(atom_to_fragment, selected_fragments)
+    selected_atoms = selected_atom_mask.nonzero(as_tuple=True)[0]
+
+    num_atoms = batch.x.size(0)
+    atom_map = torch.full((num_atoms,), -1, dtype=torch.long, device=device)
+    atom_map[selected_atoms] = torch.arange(selected_atoms.numel(), device=device)
+
+    bond_index = batch.bond_index
+    boundary_bonds = batch.fragment_edge_to_bond_index[mask]
+    if bond_index.numel():
+        bsrc, bdst = bond_index[0], bond_index[1]
+        endpoint_mask = selected_atom_mask[bsrc] & selected_atom_mask[bdst]
+        internal_mask = endpoint_mask & (atom_to_fragment[bsrc] == atom_to_fragment[bdst])
+        internal_bonds = internal_mask.nonzero(as_tuple=True)[0]
+        selected_bonds = torch.unique(torch.cat([internal_bonds, boundary_bonds]))
+    else:
+        selected_bonds = torch.empty((0,), dtype=torch.long, device=device)
+
+    # Per-bond weight: internal bonds 1.0, selected boundary bonds score + 1
+    # (matches build_reconstructed_bond_weight). selected_bonds is sorted.
+    bond_weight = torch.ones(selected_bonds.numel(), dtype=batch.x.dtype, device=device)
+    if selected_bonds.numel() and boundary_bonds.numel():
+        if selected_fragment_edge_weight is None:
+            boundary_scores = torch.ones(boundary_bonds.numel(), dtype=batch.x.dtype, device=device)
+        else:
+            weight = torch.as_tensor(selected_fragment_edge_weight, dtype=batch.x.dtype, device=device)
+            boundary_scores = weight[mask]
+        positions = torch.searchsorted(selected_bonds, boundary_bonds)
+        bond_weight[positions] = boundary_scores + 1
+
+    if selected_bonds.numel():
+        src_local = atom_map[bond_index[0, selected_bonds]]
+        dst_local = atom_map[bond_index[1, selected_bonds]]
+        edge_index = torch.stack(
+            [torch.cat([src_local, dst_local]), torch.cat([dst_local, src_local])],
+            dim=0,
+        )
+        bond_attrs = batch.bond_attr[selected_bonds]
+        edge_attr = torch.cat([bond_attrs, bond_attrs], dim=0)
+        edge_weight = torch.cat([bond_weight, bond_weight])
+    else:
+        edge_index = torch.empty((2, 0), dtype=torch.long, device=device)
+        edge_attr = batch.bond_attr.new_empty((0, batch.bond_attr.size(1)))
+        edge_weight = batch.x.new_empty((0,))
+
+    return Data(
+        x=batch.x[selected_atoms],
+        edge_index=edge_index,
+        edge_attr=edge_attr,
+        edge_weight=edge_weight,
+        batch=batch.batch[selected_atoms],
+    )

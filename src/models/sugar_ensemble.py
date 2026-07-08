@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 from src.models.fragment_ciga import topk_mask_over_eligible, restore_full_edge_outputs
 from src.models.fragment_graph import build_fragment_graph_batch
-from src.models.atom_reconstructor import reconstruct_batch
+from src.models.atom_reconstructor import reconstruct_batch, reconstruct_batch_fast
 
 
 class SuGAREnsemble:
@@ -58,15 +58,19 @@ class SuGAREnsemble:
             return stacked.mean(dim=0)
         return stacked.max(dim=0).values
 
-    def _aggregate_subgraph(self, batch_data, views):
+    def _aggregate_subgraph(self, batch_data, views, fast=False):
         """Stage 1+2: per-view fragment edge scores → one shared aggregated subgraph.
 
         Args:
             batch_data: Batched MoleculeData
             views: List of FragmentCIGA views to aggregate over.
+            fast: When True, reconstruct only the tensors the classifier needs
+                via ``reconstruct_batch_fast`` (the soft-vote inference path).
+                When False, use the full provenance-carrying ``reconstruct_batch``
+                (analysis / subgraph-extraction paths).
 
         Returns:
-            atom_batch: batched ReconstructedAtomData for the shared subgraph.
+            atom_batch: batched reconstructed atom subgraph for the shared subgraph.
             agg_weights: [num_fragment_edges] aggregated soft edge scores.
         """
         device = batch_data.x.device
@@ -101,9 +105,14 @@ class SuGAREnsemble:
             views[0].fragment_masker.ratio,
             aggregate_eligible,
         )
-        atom_batch = reconstruct_batch(
-            batch_data, bool_mask, selected_fragment_edge_weight=agg_weights
-        ).to(device)
+        if fast:
+            atom_batch = reconstruct_batch_fast(
+                batch_data, bool_mask, selected_fragment_edge_weight=agg_weights
+            )
+        else:
+            atom_batch = reconstruct_batch(
+                batch_data, bool_mask, selected_fragment_edge_weight=agg_weights
+            ).to(device)
         return atom_batch, agg_weights
 
     def __call__(self, batch_data, view_indices=None):
@@ -122,7 +131,7 @@ class SuGAREnsemble:
             raise ValueError("view_indices must contain at least one view")
 
         # Stage 1+2: per-view scoring → shared aggregated subgraph
-        atom_batch, _ = self._aggregate_subgraph(batch_data, views)
+        atom_batch, _ = self._aggregate_subgraph(batch_data, views, fast=True)
 
         # Stage 3: each classifier predicts on the shared subgraph; soft vote
         all_probs = []
