@@ -10,7 +10,10 @@ that the ensemble votes on, and reports:
   * per-molecule figures pairing, for each view and the aggregate, the highlighted
     molecular subgraph with the fragment graph (fragments as nodes, laid out with a
     force-directed spring layout) with the extracted fragment edges highlighted;
-    each fragment gets its own color, shared between the two panels.
+    each fragment gets its own color, shared between the two panels,
+  * raw fragment and fragment-pair selection metrics,
+  * support-filtered interpretation tables for top fragments, top fragment-pairs,
+    and ranked functional-group rows.
 
 A checkpoint must be produced first via ``train_sugar.py --save_model ...``; both the
 rich ``save_training_checkpoint`` format and the bare ``{view_index: state_dict}`` map
@@ -19,7 +22,34 @@ are accepted. The checkpoint's view count / architecture must match the data.
 The checkpoint and data directory can be given on the command line or, if omitted,
 are read from ``--config``: ``--model_path`` falls back to the config's ``model_path``
 or ``save_model``, and ``--processed_dir`` falls back to the config's ``processed_dir``.
-CLI flags override the config when both are present. 
+CLI flags override the config when both are present.
+
+CLI options:
+    --config PATH
+        Optional YAML config. Used for model/data defaults and normal training
+        config values.
+    --model_path PATH
+        Trained checkpoint path. Defaults to model_path or save_model from config.
+    --processed_dir PATH
+        Directory containing processed split .pt files. Defaults to processed_dir
+        from config.
+    --split NAME
+        Split to analyze. Defaults to the config test_split or "test".
+    --num_samples N
+        Optional cap on molecules analyzed. Default: all molecules in the split.
+    --num_visualize N
+        Number of molecule visualization PNGs to write. Default: 3.
+    --output_dir PATH
+        Output directory for CSVs and plots. Default: results/subgraph_analysis.
+    --metric_min_available N
+        Minimum available_count required for interpretation tables. Default: 10.
+    --metric_top_k N
+        Rows to keep in each ranked interpretation table. Use <=0 to keep all.
+        Default: 25.
+    --batch_size N
+        Override analysis DataLoader batch size.
+    --device {cpu,cuda}
+        Override device. Defaults to config/device resolution.
 
 Example with explicit paths:
     python scripts/analyze_subgraphs.py \
@@ -470,7 +500,151 @@ def write_fragment_selection_metrics(records, output_dir):
     )
     print(f"Wrote fragment selection metrics: {fragment_path}")
     print(f"Wrote fragment-pair selection metrics: {edge_path}")
-    return fragment_path, edge_path
+    return fragment_rows, edge_rows
+
+
+def _metric_value(row, key, default=0.0):
+    value = row.get(key, default)
+    if value in (None, ""):
+        return default
+    return float(value)
+
+
+def _metric_int(row, key):
+    return int(_metric_value(row, key, 0.0))
+
+
+def _passes_support(row, min_available):
+    return _metric_int(row, "available_count") >= min_available
+
+
+def _limited_sorted(rows, primary_key, top_k):
+    sorted_rows = sorted(
+        rows,
+        key=lambda row: (
+            -_metric_value(row, primary_key),
+            -_metric_int(row, "selected_count"),
+            -_metric_int(row, "available_count"),
+            tuple(str(row.get(key, "")) for key in sorted(row)),
+        ),
+    )
+    if top_k is None or top_k <= 0:
+        return sorted_rows
+    return sorted_rows[:top_k]
+
+
+def _top_within_groups(rows, group_fields, primary_key, top_k):
+    grouped = {}
+    for row in rows:
+        key = tuple(row[field] for field in group_fields)
+        grouped.setdefault(key, []).append(row)
+
+    ranked = []
+    for key in sorted(grouped):
+        group_rows = _limited_sorted(grouped[key], primary_key, top_k)
+        for rank, row in enumerate(group_rows, start=1):
+            ranked.append(
+                {
+                    **dict(zip(group_fields, key)),
+                    "rank_within_group": rank,
+                    **row,
+                }
+            )
+    return ranked
+
+
+def _filter_summary_rows(name, rows, min_available):
+    kept = sum(1 for row in rows if _passes_support(row, min_available))
+    return {
+        "metric_table": name,
+        "min_available": min_available,
+        "total_rows": len(rows),
+        "kept_rows": kept,
+        "dropped_low_support_rows": len(rows) - kept,
+    }
+
+
+def build_fragment_interpretation_tables(fragment_rows, edge_rows, min_available=10, top_k=25):
+    """Build mentor-facing interpretation tables from raw selection metrics.
+
+    Raw metric CSVs stay complete. These tables apply a support filter so rare
+    one-off fragments do not dominate interpretation.
+    """
+    supported_fragments = [
+        row for row in fragment_rows
+        if _passes_support(row, min_available)
+    ]
+    supported_edges = [
+        row for row in edge_rows
+        if _passes_support(row, min_available)
+    ]
+
+    tables = {
+        "interpretation_filter_summary.csv": [
+            _filter_summary_rows("fragment_selection_metrics", fragment_rows, min_available),
+            _filter_summary_rows("fragment_pair_selection_metrics", edge_rows, min_available),
+        ],
+        "top_fragments_by_selection_rate.csv": _limited_sorted(
+            supported_fragments,
+            "selection_rate",
+            top_k,
+        ),
+        "top_fragments_by_selected_count.csv": _limited_sorted(
+            supported_fragments,
+            "selected_count",
+            top_k,
+        ),
+        "top_fragment_pairs_by_selection_rate.csv": _limited_sorted(
+            supported_edges,
+            "selection_rate",
+            top_k,
+        ),
+        "top_fragment_pairs_by_selected_count.csv": _limited_sorted(
+            supported_edges,
+            "selected_count",
+            top_k,
+        ),
+        "top_functional_group_fragments.csv": _top_within_groups(
+            supported_fragments,
+            ["label", "selection_source", "fragment_type"],
+            "selection_rate",
+            top_k,
+        ),
+        "top_functional_group_pairs.csv": _top_within_groups(
+            supported_edges,
+            ["label", "selection_source", "fragment_a_type", "fragment_b_type"],
+            "selection_rate",
+            top_k,
+        ),
+    }
+    return tables
+
+
+def write_fragment_interpretation_tables(
+    fragment_rows,
+    edge_rows,
+    output_dir,
+    min_available=10,
+    top_k=25,
+):
+    """Write support-filtered interpretation tables derived from raw metrics."""
+    tables = build_fragment_interpretation_tables(
+        fragment_rows,
+        edge_rows,
+        min_available=min_available,
+        top_k=top_k,
+    )
+    interpretation_dir = output_dir / "interpretation"
+    paths = []
+    for filename, rows in tables.items():
+        if rows:
+            fieldnames = list(rows[0].keys())
+        else:
+            fieldnames = ["empty"]
+        path = write_csv_rows(interpretation_dir / filename, rows, fieldnames)
+        paths.append(path)
+    print(f"Wrote {len(paths)} interpretation table(s): {interpretation_dir}")
+    return paths
 
 
 def print_summary(records):
@@ -770,7 +944,10 @@ def _safe_filename(text):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument(
         "--model_path",
@@ -788,6 +965,18 @@ def parse_args():
     parser.add_argument("--num_samples", type=int, default=None, help="Max molecules (default: all)")
     parser.add_argument("--num_visualize", type=int, default=3)
     parser.add_argument("--output_dir", type=str, default="results/subgraph_analysis")
+    parser.add_argument(
+        "--metric_min_available",
+        type=int,
+        default=10,
+        help="Minimum available_count required for interpretation tables.",
+    )
+    parser.add_argument(
+        "--metric_top_k",
+        type=int,
+        default=25,
+        help="Rows to keep in each ranked interpretation table; <=0 keeps all rows.",
+    )
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
     return parser.parse_args()
@@ -831,7 +1020,14 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print_summary(records)
-    write_fragment_selection_metrics(records, output_dir)
+    fragment_rows, edge_rows = write_fragment_selection_metrics(records, output_dir)
+    write_fragment_interpretation_tables(
+        fragment_rows,
+        edge_rows,
+        output_dir,
+        min_available=args.metric_min_available,
+        top_k=args.metric_top_k,
+    )
     plot_agreement_heatmap(records, output_dir, num_views)
     visualize_molecules(records, output_dir, args.num_visualize)
     print(f"\nDone. Outputs in {output_dir}")

@@ -1,6 +1,26 @@
 #!/usr/bin/env python
 """Inspect processed molecular .pt splits created by src/data/preprocess.py.
 
+CLI arguments:
+    path
+        Path to a processed .pt split file or a directory of split .pt files.
+
+CLI options:
+    --splits NAME [NAME ...]
+        Split names to inspect when path is a directory.
+    --index N
+        Molecule index to inspect. Default: 0.
+    --max-items N
+        Maximum list/dict items to print. Default: 8.
+    --max-chars N
+        Maximum characters for scalar/list previews. Default: 220.
+    --metadata-json
+        Print full metadata as JSON.
+    --full-lists
+        Print complete list/tensor values like the old snippet.
+    --all-fields
+        Also print a generic summary of every stored field.
+
 Examples:
     .\.venv\Scripts\python.exe scripts\inspect_processed_pt.py data\processed\drugood_lbap_core_ec50_assay\group_graph\ood_val.pt --index 0
     .\.venv\Scripts\python.exe scripts\inspect_processed_pt.py data\processed\drugood_lbap_core_ec50_assay\group_graph --splits train ood_val ood_test
@@ -192,7 +212,10 @@ def paths_to_inspect(path, split_names):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("path", help="Path to a processed .pt split file or a directory of split .pt files.")
     parser.add_argument("--splits", nargs="+", help="Split names to inspect when path is a directory.")
     parser.add_argument("--index", type=int, default=0, help="Molecule index to inspect.")

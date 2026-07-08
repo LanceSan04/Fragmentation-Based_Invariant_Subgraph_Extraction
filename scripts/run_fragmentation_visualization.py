@@ -1,5 +1,15 @@
 """Run molecular fragmentation on one molecule and save a visual summary.
 
+CLI options:
+    --smiles SMILES
+        SMILES string to fragment. Default: CCOC(=O)C.
+    --output-dir PATH
+        Directory for the PNG and text summary. Default:
+        results/fragment_visualizations.
+    --fragmentation NAME
+        Fragmentation method to visualize. Choices are sorted(FRAGMENTERS).
+        Default: group_graph.
+
 Example:
     python scripts/run_fragmentation_visualization.py --smiles "CCOC(=O)C"
     python scripts/run_fragmentation_visualization.py --smiles "CCOC(=O)C" --fragmentation brics
@@ -63,7 +73,8 @@ def main():
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Visualize molecular fragments for one SMILES string."
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--smiles",

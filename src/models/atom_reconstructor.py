@@ -64,6 +64,8 @@ def reconstruct_atom_graph(
     num_fragment_edges = molecule_data.fragment_edge_index.size(1)
     if selected_fragment_edge_mask.numel() != num_fragment_edges:
         raise ValueError("selected_fragment_edge_mask must contain one value per fragment edge")
+    if selected_fragment_edge_mask.dim() != 1:
+        raise ValueError("selected_fragment_edge_mask must be a 1D tensor")
     if selected_fragment_edge_weight is not None:
         selected_fragment_edge_weight = torch.as_tensor(
             selected_fragment_edge_weight,
@@ -74,6 +76,8 @@ def reconstruct_atom_graph(
             raise ValueError(
                 "selected_fragment_edge_weight must contain one value per fragment edge"
             )
+        if selected_fragment_edge_weight.dim() != 1:
+            raise ValueError("selected_fragment_edge_weight must be a 1D tensor")
 
     if num_fragment_edges == 0:
         selected_fragments = torch.arange(
@@ -107,6 +111,11 @@ def reconstruct_atom_graph(
             :,
             selected_fragment_edge_mask,
         ]
+        validate_selected_fragment_provenance(
+            molecule_data,
+            selected_bond_indices,
+            selected_attachment_atoms,
+        )
         if selected_fragment_edge_weight is None:
             selected_edge_weights = molecule_data.x.new_ones((selected_fragment_edge_ids.numel(),))
         else:
@@ -233,7 +242,7 @@ def relabel_reconstructed_atoms(atom_ids, edge_index):
     if edge_index.numel() == 0:
         return torch.empty((2, 0), dtype=torch.long, device=edge_index.device), atom_ids
 
-    max_id = int(edge_index.max())
+    max_id = int(torch.maximum(edge_index.max(), atom_ids.max()))
     
     mapping = torch.zeros(max_id + 1, dtype=torch.long, device=edge_index.device)
     mapping[atom_ids] = torch.arange(atom_ids.numel(), device=edge_index.device)
@@ -262,6 +271,25 @@ def relabel_attachment_atoms(selected_atoms, selected_attachment_atoms):
     return relabeled
 
 
+def validate_selected_fragment_provenance(
+    molecule_data,
+    selected_bond_indices,
+    selected_attachment_atoms,
+):
+    """Fail early when selected fragment-edge provenance cannot index this molecule."""
+    if selected_bond_indices.numel() > 0:
+        if selected_bond_indices.min().item() < 0:
+            raise ValueError("selected fragment edge references a negative bond index")
+        if selected_bond_indices.max().item() >= molecule_data.bond_attr.size(0):
+            raise ValueError("selected fragment edge references a bond outside the molecule")
+
+    if selected_attachment_atoms.numel() > 0:
+        if selected_attachment_atoms.min().item() < 0:
+            raise ValueError("selected fragment edge references a negative attachment atom")
+        if selected_attachment_atoms.max().item() >= molecule_data.x.size(0):
+            raise ValueError("selected fragment edge references an atom outside the molecule")
+
+
 def build_reconstructed_bond_weight(
     selected_unique_bonds,
     selected_bond_indices,
@@ -279,6 +307,11 @@ def build_reconstructed_bond_weight(
     selected_edge_weights = torch.as_tensor(selected_edge_weights, dtype=dtype, device=device)
     # selected_unique_bonds is sorted (from torch.unique); searchsorted gives each bond's position
     positions = torch.searchsorted(selected_unique_bonds, selected_bond_indices)
+    if (
+        (positions >= selected_unique_bonds.numel()).any()
+        or (selected_unique_bonds[positions] != selected_bond_indices).any()
+    ):
+        raise ValueError("selected fragment edge references a bond missing from reconstruction")
     weights[positions] = selected_edge_weights + 1
     return weights
 
@@ -293,21 +326,25 @@ def reconstruct_batch(batch, selected_fragment_edge_mask, selected_fragment_edge
         )
 
     selected_fragment_edge_mask = torch.as_tensor(selected_fragment_edge_mask, dtype=torch.bool)
+    if selected_fragment_edge_mask.dim() != 1:
+        raise ValueError("selected_fragment_edge_mask must be a 1D tensor")
     if selected_fragment_edge_weight is not None:
         selected_fragment_edge_weight = torch.as_tensor(selected_fragment_edge_weight)
         if selected_fragment_edge_weight.numel() != selected_fragment_edge_mask.numel():
             raise ValueError(
                 "selected_fragment_edge_weight must contain one value per selected mask entry"
             )
+        if selected_fragment_edge_weight.dim() != 1:
+            raise ValueError("selected_fragment_edge_weight must be a 1D tensor")
     reconstructed = []
     cursor = 0
     for molecule_data in batch.to_data_list():
         num_edges = molecule_data.fragment_edge_index.size(1)
-        mask = selected_fragment_edge_mask[cursor: cursor + num_edges]
+        mask = selected_fragment_edge_mask[cursor: cursor + num_edges].contiguous()
         if selected_fragment_edge_weight is None:
             edge_weight = None
         else:
-            edge_weight = selected_fragment_edge_weight[cursor: cursor + num_edges]
+            edge_weight = selected_fragment_edge_weight[cursor: cursor + num_edges].contiguous()
         reconstructed.append(
             reconstruct_atom_graph(
                 molecule_data,

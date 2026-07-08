@@ -1,6 +1,15 @@
 #!/usr/bin/env python
 """Plot SuGAr/FragmentCIGA per-epoch loss CSV logs.
 
+CLI arguments:
+    loss_log
+        Path to a CSV written by SuGARTrainer.
+
+CLI options:
+    --output-dir PATH
+        Directory for summary text and plots. Default:
+        reports/training_diagnostics.
+
 Example:
     .\.venv\Scripts\python.exe scripts\plot_loss_logs.py ^
         logs\sugar_training_losses.csv ^
@@ -317,7 +326,10 @@ def make_plots(rows, output_dir):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("loss_log", help="Path to a CSV written by SuGARTrainer.")
     parser.add_argument("--output-dir", default="reports/training_diagnostics")
     args = parser.parse_args()

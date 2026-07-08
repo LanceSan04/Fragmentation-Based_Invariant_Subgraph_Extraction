@@ -1,6 +1,9 @@
 import unittest
 
-from scripts.analyze_subgraphs import build_fragment_selection_metric_rows
+from scripts.analyze_subgraphs import (
+    build_fragment_interpretation_tables,
+    build_fragment_selection_metric_rows,
+)
 
 
 class SubgraphFragmentMetricTests(unittest.TestCase):
@@ -102,6 +105,174 @@ class SubgraphFragmentMetricTests(unittest.TestCase):
         self.assertEqual(len(view_zero_rows), 1)
         self.assertEqual(view_zero_rows[0]["available_count"], 2)
         self.assertEqual(view_zero_rows[0]["selected_count"], 2)
+
+    def test_interpretation_tables_filter_and_rank_fragment_metrics(self):
+        fragment_rows = [
+            {
+                "label": "1",
+                "selection_source": "aggregated",
+                "fragment_type": "frag",
+                "fragment_smiles": "C=O",
+                "available_count": 20,
+                "selected_count": 10,
+                "selection_rate": 0.5,
+            },
+            {
+                "label": "0",
+                "selection_source": "aggregated",
+                "fragment_type": "frag",
+                "fragment_smiles": "C=O",
+                "available_count": 20,
+                "selected_count": 2,
+                "selection_rate": 0.1,
+            },
+            {
+                "label": "1",
+                "selection_source": "aggregated",
+                "fragment_type": "frag",
+                "fragment_smiles": "rare",
+                "available_count": 1,
+                "selected_count": 1,
+                "selection_rate": 1.0,
+            },
+        ]
+
+        tables = build_fragment_interpretation_tables(
+            fragment_rows,
+            [],
+            min_available=5,
+            top_k=10,
+        )
+
+        top_rates = tables["top_fragments_by_selection_rate.csv"]
+        self.assertEqual(len(top_rates), 2)
+        self.assertEqual(top_rates[0]["fragment_smiles"], "C=O")
+        self.assertEqual(top_rates[0]["label"], "1")
+
+        filter_summary = tables["interpretation_filter_summary.csv"][0]
+        self.assertEqual(filter_summary["total_rows"], 3)
+        self.assertEqual(filter_summary["kept_rows"], 2)
+        self.assertEqual(filter_summary["dropped_low_support_rows"], 1)
+
+    def test_interpretation_tables_keep_only_selected_report_set(self):
+        fragment_rows = [
+            {
+                "label": "0",
+                "selection_source": "aggregated",
+                "fragment_type": "frag",
+                "fragment_smiles": "C=O",
+                "available_count": 10,
+                "selected_count": 1,
+                "selection_rate": 0.1,
+            },
+            {
+                "label": "1",
+                "selection_source": "aggregated",
+                "fragment_type": "frag",
+                "fragment_smiles": "C=O",
+                "available_count": 10,
+                "selected_count": 7,
+                "selection_rate": 0.7,
+            },
+            {
+                "label": "1",
+                "selection_source": "any_view",
+                "fragment_type": "frag",
+                "fragment_smiles": "C=O",
+                "available_count": 10,
+                "selected_count": 9,
+                "selection_rate": 0.9,
+            },
+            {
+                "label": "1",
+                "selection_source": "view_0",
+                "fragment_type": "frag",
+                "fragment_smiles": "C=O",
+                "available_count": 10,
+                "selected_count": 2,
+                "selection_rate": 0.2,
+            },
+            {
+                "label": "1",
+                "selection_source": "view_1",
+                "fragment_type": "frag",
+                "fragment_smiles": "C=O",
+                "available_count": 10,
+                "selected_count": 8,
+                "selection_rate": 0.8,
+            },
+        ]
+
+        tables = build_fragment_interpretation_tables(
+            fragment_rows,
+            [],
+            min_available=1,
+            top_k=10,
+        )
+
+        self.assertEqual(
+            set(tables),
+            {
+                "interpretation_filter_summary.csv",
+                "top_fragments_by_selection_rate.csv",
+                "top_fragments_by_selected_count.csv",
+                "top_fragment_pairs_by_selection_rate.csv",
+                "top_fragment_pairs_by_selected_count.csv",
+                "top_functional_group_fragments.csv",
+                "top_functional_group_pairs.csv",
+            },
+        )
+        self.assertNotIn("fragment_label_selection_deltas.csv", tables)
+        self.assertNotIn("fragment_enrichment.csv", tables)
+        self.assertNotIn("fragment_view_selection_spread.csv", tables)
+        self.assertNotIn("fragment_aggregation_deltas.csv", tables)
+
+    def test_interpretation_tables_cover_fragment_pairs_and_functional_groups(self):
+        edge_rows = [
+            {
+                "label": "1",
+                "selection_source": "aggregated",
+                "fragment_a_type": "frag",
+                "fragment_a_smiles": "C=O",
+                "fragment_b_type": "split_frag",
+                "fragment_b_smiles": "N",
+                "available_count": 12,
+                "selected_count": 9,
+                "selection_rate": 0.75,
+            },
+            {
+                "label": "1",
+                "selection_source": "aggregated",
+                "fragment_a_type": "frag",
+                "fragment_a_smiles": "O",
+                "fragment_b_type": "split_frag",
+                "fragment_b_smiles": "N",
+                "available_count": 12,
+                "selected_count": 3,
+                "selection_rate": 0.25,
+            },
+        ]
+
+        tables = build_fragment_interpretation_tables(
+            [],
+            edge_rows,
+            min_available=5,
+            top_k=10,
+        )
+
+        top_pairs = tables["top_fragment_pairs_by_selection_rate.csv"]
+        self.assertEqual(top_pairs[0]["fragment_a_smiles"], "C=O")
+        self.assertEqual(top_pairs[0]["fragment_b_smiles"], "N")
+
+        group_pairs = tables["top_functional_group_pairs.csv"]
+        self.assertEqual(len(group_pairs), 2)
+        self.assertEqual(group_pairs[0]["rank_within_group"], 1)
+        self.assertEqual(group_pairs[0]["fragment_a_smiles"], "C=O")
+        self.assertNotIn("fragment_pair_type_selection_summary.csv", tables)
+        self.assertNotIn("fragment_pair_enrichment.csv", tables)
+        self.assertNotIn("fragment_pair_label_selection_deltas.csv", tables)
+        self.assertNotIn("fragment_pair_view_selection_spread.csv", tables)
+        self.assertNotIn("fragment_pair_aggregation_deltas.csv", tables)
 
 
 if __name__ == "__main__":

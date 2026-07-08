@@ -23,7 +23,11 @@ from src.data.molecule_example import build_molecule_example
 from src.data.pyg_batch import molecule_example_to_data
 from src.data.preprocess import run_preprocessing
 from src.fragmentation import build_fragmenter
-from src.models.atom_reconstructor import reconstruct_atom_graph, reconstruct_batch
+from src.models.atom_reconstructor import (
+    reconstruct_atom_graph,
+    reconstruct_batch,
+    relabel_reconstructed_atoms,
+)
 
 
 class FragmentPipelineTests(unittest.TestCase):
@@ -421,6 +425,40 @@ class FragmentPipelineTests(unittest.TestCase):
         self.assertEqual(batch.selected_attachment_atoms.tolist(), [[2, 2], [3, 3]])
         self.assertEqual(batch.selected_attachment_node_index.tolist(), [[0, 3], [1, 4]])
         self.assertLess(int(batch.selected_attachment_node_index.max()), batch.x.size(0))
+
+    def test_relabel_reconstructed_atoms_allows_selected_atoms_above_edge_endpoint_max(self):
+        atom_ids = torch.tensor([2, 5], dtype=torch.long)
+        edge_index = torch.tensor([[2], [2]], dtype=torch.long)
+
+        relabeled_edge_index, relabeled_atom_ids = relabel_reconstructed_atoms(atom_ids, edge_index)
+
+        self.assertEqual(relabeled_edge_index.tolist(), [[0], [0]])
+        self.assertEqual(relabeled_atom_ids.tolist(), [2, 5])
+
+    def test_partial_brics_and_recap_reconstruction_in_batch(self):
+        smiles = "CC(=O)NCCOC(=O)c1ccccc1"
+        for fragmentation in ("brics", "recap"):
+            data_list = [
+                self.build_data(smiles, fragmentation),
+                self.build_data("CCOC(=O)NCC", fragmentation),
+            ]
+            masks = []
+            for data in data_list:
+                num_edges = data.fragment_edge_index.size(1)
+                self.assertGreater(num_edges, 0)
+                mask = torch.zeros(num_edges, dtype=torch.bool)
+                mask[0] = True
+                reconstructed = reconstruct_atom_graph(data, mask)
+                self.assertGreater(reconstructed.x.size(0), 0)
+                self.assertEqual(reconstructed.selected_fragment_edge_ids.tolist(), [0])
+                masks.append(mask)
+
+            batch = Batch.from_data_list(data_list, follow_batch=["fragment_x_static"])
+            reconstructed_batch = reconstruct_batch(batch, torch.cat(masks))
+            reconstructed = reconstructed_batch.to_data_list()
+
+            self.assertEqual(len(reconstructed), 2)
+            self.assertTrue(all(item.x.size(0) > 0 for item in reconstructed))
 
     def assert_fragment_atoms_connected(self, data, atoms):
         atoms = set(int(atom_id) for atom_id in atoms.tolist())

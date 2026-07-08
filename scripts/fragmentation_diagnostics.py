@@ -1,6 +1,23 @@
 #!/usr/bin/env python
 """Summarize processed split fragmentation statistics and make report plots.
 
+CLI arguments:
+    processed_dir
+        Directory containing processed split .pt files.
+
+CLI options:
+    --splits NAME [NAME ...]
+        Split names to analyze. Default: all .pt files in processed_dir.
+    --output-dir PATH
+        Directory for CSV/JSON/plots. Default:
+        reports/fragmentation_diagnostics/{dataset}_{fragmentation}.
+    --top-k N
+        Number of top domains/fragments to report. Default: 20.
+    --max-molecules N
+        Optional quick-test cap per split.
+    --no-plots
+        Write CSV/JSON only and skip plots.
+
 Example:
     .\.venv\Scripts\python.exe scripts\fragmentation_diagnostics.py ^
         data\processed\drugood_lbap_core_ec50_assay\group_graph ^
@@ -461,7 +478,10 @@ def default_output_dir(diagnostics, processed_dir):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("processed_dir", help="Directory containing processed split .pt files.")
     parser.add_argument("--splits", nargs="+", help="Split names to analyze. Defaults to all .pt files.")
     parser.add_argument(
