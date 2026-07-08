@@ -1,32 +1,41 @@
 #!/usr/bin/env python
-"""Consolidated CLI for the REU SuGAr-style molecular pipeline.
+r"""Consolidated CLI for the REU SuGAr-style molecular pipeline.
 
 This entrypoint orchestrates preprocessing, FragmentCIGA/SuGAr training,
 checkpoint resume/evaluation, processed-data inspection, and diagnostics.
 Most experiment defaults come from configs/experiment.yaml; CLI flags override
 those defaults for a single run.
 
+When ``output_root`` is configured, run artifacts are consolidated under:
+
+    outputs/{dataset}/{fragmentation}/{run_name}/
+
+That run folder contains checkpoints, training logs, final metrics,
+diagnostic reports, the effective config, and run_manifest.json. Processed
+``.pt`` split files stay under data/processed/... because they are reusable
+dataset artifacts.
+
 Examples:
-    # Run the full pipeline: preprocess, train, and optional diagnostics
+    # Run the full pipeline: preprocess, train, checkpoint, metrics, diagnostics
     .\.venv\Scripts\python.exe main.py full --config configs\experiment.yaml --validate-loaders --fragment-diagnostics --loss-plots
 
     # Preprocess the configured dataset and validate PyG loaders
     .\.venv\Scripts\python.exe main.py preprocess --config configs\experiment.yaml --validate-loaders
 
-    # Short CPU smoke training run with checkpoint and loss CSV
-    .\.venv\Scripts\python.exe main.py train --config configs\experiment.yaml --epochs 1 --patience 1 --num-views 1 --hidden-dim 8 --gnn-layers 1 --batch-size 512 --device cpu --lambda-contrast 0 --lambda-diversity 0 --lambda-irm 0 --save-model checkpoints\smoke.pt --loss-log-path logs\smoke_losses.csv
+    # Short CPU smoke training run using a named consolidated output folder
+    .\.venv\Scripts\python.exe main.py train --config configs\experiment.yaml --run-name smoke_cpu --epochs 1 --patience 1 --num-views 1 --hidden-dim 8 --gnn-layers 1 --batch-size 512 --device cpu --lambda-contrast 0 --lambda-diversity 0 --lambda-irm 0
 
     # Evaluate a saved checkpoint without training
-    .\.venv\Scripts\python.exe main.py eval checkpoints\smoke.pt --splits ood_test iid_test --device cpu
+    .\.venv\Scripts\python.exe main.py eval outputs\...\checkpoints\best_model.pt --config configs\experiment.yaml --splits ood_test iid_test --device cpu
 
     # Resume training from a checkpoint
-    .\.venv\Scripts\python.exe main.py resume checkpoints\smoke.pt --epochs 5 --save-model checkpoints\resumed.pt
+    .\.venv\Scripts\python.exe main.py resume outputs\...\checkpoints\best_model.pt --config configs\experiment.yaml --epochs 5 --run-name resumed_run
 
     # Run fragmentation diagnostics
-    .\.venv\Scripts\python.exe main.py diagnostics fragments data\processed\drugood_lbap_core_ec50_assay\group_graph --splits train ood_val ood_test
+    .\.venv\Scripts\python.exe main.py diagnostics fragments data\processed\drugood_lbap_core_ec50_assay\group_graph --splits train ood_val ood_test --output-dir outputs\manual\group_graph_fragmentation_diagnostics
 
     # Plot loss logs
-    .\.venv\Scripts\python.exe main.py diagnostics losses logs\sugar_training_losses.csv
+    .\.venv\Scripts\python.exe main.py diagnostics losses outputs\...\logs\training_epoch_losses.csv --output-dir outputs\...\reports\training_curves
 
     # Inspect one processed molecule record
     .\.venv\Scripts\python.exe main.py inspect data\processed\drugood_lbap_core_ec50_assay\group_graph --splits train --index 0
@@ -317,7 +326,10 @@ def add_common_arguments(parser):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     preprocess = subparsers.add_parser("preprocess", help="Run dataset preprocessing.")
