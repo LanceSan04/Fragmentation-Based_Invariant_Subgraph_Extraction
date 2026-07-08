@@ -4,30 +4,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.models.fragment_masker import FragmentMasker
+from src.models.fragment_masker import FragmentMasker, segment_topk_mask
 from src.models.gnn_encoders import SimpleGAT
 from src.models.fragment_graph import build_fragment_graph_batch
 from src.models.fragment_edge_sampler import FragmentEdgeSampler
-from src.models.atom_reconstructor import reconstruct_batch
+from src.models.atom_reconstructor import reconstruct_batch, reconstruct_batch_fast
 from src.data.atom_graph import ATOM_FDIM, BOND_FDIM
 
 
 def topk_mask_over_eligible(scores, edge_batch, ratio, eligible_mask):
     """Select top-k edges per graph, forbidding sampler-dropped edges."""
-    mask = torch.zeros_like(scores, dtype=torch.bool)
-    if scores.numel() == 0:
-        return mask
-
-    eligible_mask = eligible_mask.to(device=scores.device, dtype=torch.bool)
-    for gid in edge_batch.unique():
-        graph_idx = (edge_batch == gid).nonzero(as_tuple=True)[0]
-        eligible_idx = graph_idx[eligible_mask[graph_idx]]
-        if eligible_idx.numel() == 0:
-            continue
-        k = max(1, int(eligible_idx.numel() * ratio))
-        top_local = scores[eligible_idx].topk(min(k, eligible_idx.numel()), largest=True).indices
-        mask[eligible_idx[top_local]] = True
-    return mask
+    return segment_topk_mask(scores, edge_batch, ratio, eligible_mask=eligible_mask)
 
 
 def restore_full_edge_outputs(
@@ -129,13 +116,17 @@ class FragmentCIGA(nn.Module):
             edge_dim=atom_edge_dim,
         )
 
-    def forward(self, batch_data, return_intermediates=False):
+    def forward(self, batch_data, return_intermediates=False, fragment_batch=None):
         """Per-view forward pass: mask → reconstruct → classify.
 
         Args:
             batch_data: Batched MoleculeData
             return_intermediates: If True, also return embeddings, fragment_scores,
                 and logits (needed by SuGARTrainer's auxiliary losses).
+            fragment_batch: Optional prebuilt batched fragment graph. The fragment
+                graph is a pure function of ``batch_data`` and identical across all
+                views, so the trainer builds it once per batch and passes it to
+                every view.
 
         Returns:
             predictions: [batch_size, num_classes] log-probabilities
@@ -143,7 +134,8 @@ class FragmentCIGA(nn.Module):
                 'embeddings', 'fragment_scores', 'logits'
         """
         device = batch_data.x.device
-        fragment_batch = build_fragment_graph_batch(batch_data).to(device)
+        if fragment_batch is None:
+            fragment_batch = build_fragment_graph_batch(batch_data).to(device)
 
         sampled_fragment_batch, eligible_mask = self.fragment_edge_sampler(fragment_batch)
         sampled_edge_scores, sampled_bool_mask = self.fragment_masker(sampled_fragment_batch)
@@ -163,9 +155,9 @@ class FragmentCIGA(nn.Module):
             eligible_mask.to(device=edge_scores.device, dtype=torch.bool),
         )
 
-        atom_batch = reconstruct_batch(
+        atom_batch = reconstruct_batch_fast(
             batch_data, bool_mask, selected_fragment_edge_weight=edge_scores
-        ).to(device)
+        )
 
         logits, h_graph = self.atom_classifier(atom_batch, return_embeddings=True)
         predictions = torch.log(F.softmax(logits, dim=-1).clamp(min=1e-8))

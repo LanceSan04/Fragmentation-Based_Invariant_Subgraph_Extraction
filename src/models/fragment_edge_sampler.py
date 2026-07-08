@@ -53,17 +53,25 @@ def random_fragment_edge_mask(
         generator = torch.Generator(device=edge_batch.device)
         generator.manual_seed(int(seed))
 
-    for graph_id in edge_batch.unique(sorted=True):
-        idx = torch.nonzero(edge_batch == graph_id, as_tuple=False).view(-1)
-        keep_count = int(idx.numel() * keep_ratio)
-        if ensure_one_edge and idx.numel() > 0 and keep_ratio > 0.0:
-            keep_count = max(1, keep_count)
-        keep_count = min(keep_count, idx.numel())
-        if keep_count == 0:
-            continue
+    # Assign each edge a random key and keep the lowest-key ``keep_count`` edges
+    # per graph via one segmented sort.
+    rand = torch.rand(edge_batch.numel(), device=edge_batch.device, generator=generator)
+    counts = torch.bincount(edge_batch)
+    offsets = torch.cumsum(counts, dim=0) - counts
+    keep_count = (counts.to(torch.float32) * keep_ratio).to(torch.long)
+    if ensure_one_edge and keep_ratio > 0.0:
+        keep_count = torch.where(counts > 0, torch.clamp(keep_count, min=1), keep_count)
+    keep_count = torch.minimum(keep_count, counts)
 
-        order = torch.randperm(idx.numel(), device=edge_batch.device, generator=generator)
-        mask[idx[order[:keep_count]]] = True
+    order_r = torch.argsort(rand)
+    order_g = torch.argsort(edge_batch[order_r], stable=True)
+    perm = order_r[order_g]
+
+    sorted_g = edge_batch[perm]
+    positions = torch.arange(perm.numel(), device=edge_batch.device)
+    within_rank = positions - offsets[sorted_g]
+    keep = within_rank < keep_count[sorted_g]
+    mask[perm[keep]] = True
 
     return mask
 
