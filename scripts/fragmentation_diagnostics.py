@@ -39,6 +39,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.data.pyg_batch import fragment_view_field
+
 
 def load_matplotlib():
     try:
@@ -73,19 +75,40 @@ def safe_attr(data, name, default=None):
     return getattr(data, name, default)
 
 
-def fragment_atom_counts(data):
-    num_fragments = int(data.fragment_x_static.size(0))
+def fragment_value(data, method, field):
+    """Return a method-specific fragment field, falling back to default fields."""
+    if method:
+        method_field = fragment_view_field(method, field)
+        if hasattr(data, method_field):
+            return getattr(data, method_field)
+    return safe_attr(data, field)
+
+
+def diagnostic_methods(metadata):
+    """Return fragmentation methods represented in a processed split."""
+    methods = metadata.get("view_fragmentation_methods") or []
+    if methods:
+        return list(methods)
+    fragmentation = metadata.get("fragmentation", "")
+    return [fragmentation] if fragmentation else [""]
+
+
+def fragment_atom_counts(data, method=None):
+    fragment_x = fragment_value(data, method, "fragment_x_static")
+    atom_to_fragment = fragment_value(data, method, "atom_to_fragment")
+    num_fragments = int(fragment_x.size(0))
     if num_fragments == 0:
         return []
-    counts = torch.bincount(data.atom_to_fragment.long(), minlength=num_fragments)
+    counts = torch.bincount(atom_to_fragment.long(), minlength=num_fragments)
     return [int(value) for value in counts.tolist()]
 
 
-def fragment_internal_bond_counts(data):
-    num_fragments = int(data.fragment_x_static.size(0))
+def fragment_internal_bond_counts(data, method=None):
+    fragment_x = fragment_value(data, method, "fragment_x_static")
+    num_fragments = int(fragment_x.size(0))
     counts = [0] * num_fragments
     bond_index = safe_attr(data, "bond_index")
-    atom_to_fragment = safe_attr(data, "atom_to_fragment")
+    atom_to_fragment = fragment_value(data, method, "atom_to_fragment")
     if (
         bond_index is None
         or atom_to_fragment is None
@@ -110,18 +133,21 @@ def density(num_edges, num_nodes):
     return float(num_edges) / float(num_nodes * (num_nodes - 1) / 2.0)
 
 
-def molecule_row(split_name, split_index, data, dataset="", fragmentation=""):
+def molecule_row(split_name, split_index, data, dataset="", fragmentation="", method=None):
     num_atoms = int(data.x.size(0))
     num_bonds = int(data.bond_attr.size(0))
-    num_fragments = int(data.fragment_x_static.size(0))
-    num_fragment_edges = int(data.fragment_edge_index.size(1))
-    atom_counts = fragment_atom_counts(data)
-    internal_bond_counts = fragment_internal_bond_counts(data)
+    fragment_x = fragment_value(data, method, "fragment_x_static")
+    fragment_edge_index = fragment_value(data, method, "fragment_edge_index")
+    num_fragments = int(fragment_x.size(0))
+    num_fragment_edges = int(fragment_edge_index.size(1))
+    atom_counts = fragment_atom_counts(data, method)
+    internal_bond_counts = fragment_internal_bond_counts(data, method)
     zero_edge = num_fragment_edges == 0
 
     return {
         "dataset": dataset,
         "fragmentation": fragmentation,
+        "fragmentation_method": method or fragmentation,
         "split": split_name,
         "split_index": split_index,
         "molecule_id": safe_attr(data, "molecule_id", ""),
@@ -142,17 +168,18 @@ def molecule_row(split_name, split_index, data, dataset="", fragmentation=""):
     }
 
 
-def fragment_rows(split_name, split_index, data, dataset="", fragmentation=""):
-    atom_counts = fragment_atom_counts(data)
-    internal_bond_counts = fragment_internal_bond_counts(data)
-    fragment_types = list(safe_attr(data, "fragment_types", []) or [])
-    fragment_smiles = list(safe_attr(data, "fragment_smiles", []) or [])
+def fragment_rows(split_name, split_index, data, dataset="", fragmentation="", method=None):
+    atom_counts = fragment_atom_counts(data, method)
+    internal_bond_counts = fragment_internal_bond_counts(data, method)
+    fragment_types = list(fragment_value(data, method, "fragment_types") or [])
+    fragment_smiles = list(fragment_value(data, method, "fragment_smiles") or [])
     rows = []
     for fragment_id, atom_count in enumerate(atom_counts):
         rows.append(
             {
                 "dataset": dataset,
                 "fragmentation": fragmentation,
+                "fragmentation_method": method or fragmentation,
                 "split": split_name,
                 "split_index": split_index,
                 "molecule_id": safe_attr(data, "molecule_id", ""),
@@ -214,14 +241,14 @@ def split_summary_rows(molecule_rows, fragment_rows_all, top_k):
     by_split = defaultdict(list)
     fragments_by_split = defaultdict(list)
     for row in molecule_rows:
-        by_split[row["split"]].append(row)
+        by_split[(row["split"], row.get("fragmentation_method", ""))].append(row)
     for row in fragment_rows_all:
-        fragments_by_split[row["split"]].append(row)
+        fragments_by_split[(row["split"], row.get("fragmentation_method", ""))].append(row)
 
     rows = []
-    for split_name in sorted(by_split):
-        rows_for_split = by_split[split_name]
-        fragments = fragments_by_split[split_name]
+    for split_name, method in sorted(by_split):
+        rows_for_split = by_split[(split_name, method)]
+        fragments = fragments_by_split[(split_name, method)]
         num_molecules = len(rows_for_split)
         single_fragment_molecules = sum(
             bool(row["single_fragment"]) for row in rows_for_split
@@ -240,6 +267,7 @@ def split_summary_rows(molecule_rows, fragment_rows_all, top_k):
         summary = {
             "dataset": rows_for_split[0].get("dataset", ""),
             "fragmentation": rows_for_split[0].get("fragmentation", ""),
+            "fragmentation_method": method,
             "split": split_name,
             "num_molecules": num_molecules,
             "num_fragments_total": len(fragments),
@@ -306,28 +334,32 @@ def collect_diagnostics(processed_dir, splits, max_molecules=None, top_k=20):
         metadata[split_name] = split_metadata
         dataset = split_metadata.get("dataset", "")
         fragmentation = split_metadata.get("fragmentation", "")
+        methods = diagnostic_methods(split_metadata)
         molecules = payload["molecule_data"]
         if max_molecules is not None:
             molecules = molecules[:max_molecules]
         for split_index, data in enumerate(molecules):
-            molecule_rows.append(
-                molecule_row(
-                    split_name,
-                    split_index,
-                    data,
-                    dataset=dataset,
-                    fragmentation=fragmentation,
+            for method in methods:
+                molecule_rows.append(
+                    molecule_row(
+                        split_name,
+                        split_index,
+                        data,
+                        dataset=dataset,
+                        fragmentation=fragmentation,
+                        method=method,
+                    )
                 )
-            )
-            fragments.extend(
-                fragment_rows(
-                    split_name,
-                    split_index,
-                    data,
-                    dataset=dataset,
-                    fragmentation=fragmentation,
+                fragments.extend(
+                    fragment_rows(
+                        split_name,
+                        split_index,
+                        data,
+                        dataset=dataset,
+                        fragmentation=fragmentation,
+                        method=method,
+                    )
                 )
-            )
 
     summary_rows = split_summary_rows(molecule_rows, fragments, top_k=top_k)
     return {
@@ -338,10 +370,18 @@ def collect_diagnostics(processed_dir, splits, max_molecules=None, top_k=20):
     }
 
 
+def row_split_label(row):
+    method = row.get("fragmentation_method", "")
+    split = row["split"]
+    if method:
+        return f"{split}/{method}"
+    return split
+
+
 def values_by_split(rows, column):
     ret = defaultdict(list)
     for row in rows:
-        ret[row["split"]].append(row[column])
+        ret[row_split_label(row)].append(row[column])
     return dict(ret)
 
 
@@ -373,7 +413,7 @@ def plot_box(plt, split_values, title, ylabel, path):
 
 
 def plot_grouped_counts(plt, rows, column, title, ylabel, path, top_k=None):
-    split_names = sorted({row["split"] for row in rows})
+    split_names = sorted({row_split_label(row) for row in rows})
     total_counts = Counter(str(row[column]) for row in rows)
     categories = [key for key, _ in total_counts.most_common(top_k)] if top_k else sorted(total_counts)
     x_positions = list(range(len(split_names)))
@@ -382,9 +422,9 @@ def plot_grouped_counts(plt, rows, column, title, ylabel, path, top_k=None):
     fig, ax = plt.subplots(figsize=(max(8, len(split_names) * 1.2), 4.8))
     for category_index, category in enumerate(categories):
         values = []
-        for split_name in split_names:
+        for split_label in split_names:
             values.append(
-                sum(1 for row in rows if row["split"] == split_name and str(row[column]) == category)
+                sum(1 for row in rows if row_split_label(row) == split_label and str(row[column]) == category)
             )
         offsets = [x + (category_index - (len(categories) - 1) / 2) * width for x in x_positions]
         ax.bar(offsets, values, width=width, label=category)
@@ -415,7 +455,7 @@ def make_plots(diagnostics, output_dir, top_k=20):
     path = plot_dir / "molecule_counts_by_split.png"
     plot_bar(
         plt,
-        [row["split"] for row in summary_rows],
+        [row_split_label(row) for row in summary_rows],
         [row["num_molecules"] for row in summary_rows],
         "Molecule Count By Split",
         "molecules",

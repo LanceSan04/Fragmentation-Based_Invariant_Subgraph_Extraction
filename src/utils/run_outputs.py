@@ -10,6 +10,19 @@ import yaml
 from src.fragmentation.multi_view import fragmentation_recipe_label, unique_fragmentation_methods
 
 
+OUTPUT_TOGGLE_KEYS = {
+    "checkpoint": ("save_model",),
+    "training_epoch_losses": ("loss_log_path",),
+    "final_evaluation_metrics": ("final_metrics_path",),
+    "training_curves": ("training_diagnostics_dir",),
+    "preprocessing_fragmentation_diagnostics": ("fragmentation_diagnostics_dir",),
+    "subgraph_analysis": ("subgraph_analysis_dir",),
+    "effective_config": (),
+    "run_manifest": (),
+    "preprocess_failures": (),
+}
+
+
 def config_to_dict(config):
     if config is None:
         return {}
@@ -40,6 +53,14 @@ def safe_path_part(value, fallback="unknown"):
     if not text:
         text = fallback
     return "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in text)
+
+
+def output_enabled(config, name, default=True):
+    """Return whether an optional run artifact should be written."""
+    save_outputs = get_config_value(config, "save_outputs", None) or {}
+    if not isinstance(save_outputs, dict):
+        return default
+    return bool(save_outputs.get(name, default))
 
 
 def resolve_processed_dir(config):
@@ -94,21 +115,27 @@ def resolve_run_directory(config, command_name="run"):
 
     explicit = set(get_config_value(config, "_explicit_output_paths", []) or [])
     default_paths = {
-        "save_model": run_dir / "checkpoints" / "best_model.pt",
-        "loss_log_path": run_dir / "training_epoch_losses.csv",
-        "final_metrics_path": run_dir / "final_evaluation_metrics.json",
-        "training_diagnostics_dir": run_dir / "training_curves",
-        "fragmentation_diagnostics_dir": run_dir / "preprocessing_fragmentation_diagnostics",
-        "subgraph_analysis_dir": run_dir / "subgraph_analysis",
+        "checkpoint": ("save_model", run_dir / "checkpoints" / "best_model.pt"),
+        "training_epoch_losses": ("loss_log_path", run_dir / "training_epoch_losses.csv"),
+        "final_evaluation_metrics": ("final_metrics_path", run_dir / "final_evaluation_metrics.json"),
+        "training_curves": ("training_diagnostics_dir", run_dir / "training_curves"),
+        "preprocessing_fragmentation_diagnostics": (
+            "fragmentation_diagnostics_dir",
+            run_dir / "preprocessing_fragmentation_diagnostics",
+        ),
+        "subgraph_analysis": ("subgraph_analysis_dir", run_dir / "subgraph_analysis"),
     }
-    for key, path in default_paths.items():
-        if key not in explicit:
-            set_config_value(config, key, str(path))
+    for output_name, (key, path) in default_paths.items():
+        if key in explicit:
+            continue
+        set_config_value(config, key, str(path) if output_enabled(config, output_name) else None)
 
     return run_dir
 
 
 def write_effective_config(config):
+    if not output_enabled(config, "effective_config"):
+        return None
     run_dir = get_config_value(config, "run_dir", None)
     if not run_dir:
         return None
@@ -151,6 +178,8 @@ def build_manifest(config, command_name="run", extra=None):
 
 
 def write_run_manifest(config, command_name="run", extra=None):
+    if not output_enabled(config, "run_manifest"):
+        return None
     run_dir = get_config_value(config, "run_dir", None)
     if not run_dir:
         return None

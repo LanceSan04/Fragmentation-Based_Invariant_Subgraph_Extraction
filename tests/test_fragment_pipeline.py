@@ -15,6 +15,7 @@ import unittest
 import csv
 import json
 import pickle
+from pathlib import Path
 
 import torch
 from torch_geometric.data import Batch
@@ -29,7 +30,7 @@ from src.models.atom_reconstructor import (
     reconstruct_batch,
     relabel_reconstructed_atoms,
 )
-from scripts.fragmentation_diagnostics import split_summary_rows
+from scripts.fragmentation_diagnostics import collect_diagnostics, split_summary_rows
 
 
 class FragmentPipelineTests(unittest.TestCase):
@@ -277,6 +278,17 @@ class FragmentPipelineTests(unittest.TestCase):
             self.assertTrue(hasattr(batch, "brics_fragment_x_static_batch"))
             self.assertTrue(hasattr(batch, "recap_fragment_x_static_batch"))
             validate_dataloader_batch(batch)
+
+            diagnostics = collect_diagnostics(Path(tmp_dir), ["train"], top_k=5)
+            summary_methods = {
+                row["fragmentation_method"] for row in diagnostics["summary"]
+            }
+            self.assertEqual(summary_methods, {"group_graph", "brics", "recap"})
+            molecule_methods = {
+                row["fragmentation_method"] for row in diagnostics["molecules"]
+            }
+            self.assertEqual(molecule_methods, {"group_graph", "brics", "recap"})
+            self.assertEqual(len(diagnostics["molecules"]), 3)
 
     def test_preprocessing_writes_failure_report_for_skipped_records(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

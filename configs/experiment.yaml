@@ -6,14 +6,17 @@
 #   Preprocess DrugOOD and validate batches:
 #     .\.venv\Scripts\python.exe main.py preprocess --config configs\experiment.yaml --validate-loaders
 #
+#   Full configured run: preprocess, train, and save enabled outputs:
+#     .\.venv\Scripts\python.exe main.py full --config configs\experiment.yaml --validate-loaders
+#
 #   Short end-to-end training smoke with checkpoint:
-#     .\.venv\Scripts\python.exe main.py train --config configs\experiment.yaml --epochs 1 --patience 1 --num-views 1 --hidden-dim 8 --gnn-layers 1 --batch-size 512 --device cpu --lambda-contrast 0 --lambda-diversity 0 --lambda-irm 0 --save-model checkpoints\smoke.pt --loss-log-path logs\smoke_losses.csv
+#     .\.venv\Scripts\python.exe main.py train --config configs\experiment.yaml --run-name smoke_cpu --epochs 1 --patience 1 --num-views 1 --hidden-dim 8 --gnn-layers 1 --batch-size 512 --device cpu --lambda-contrast 0 --lambda-diversity 0 --lambda-irm 0
 #
 #   Evaluate a saved checkpoint without training:
 #     .\.venv\Scripts\python.exe main.py eval checkpoints\smoke.pt --config configs\experiment.yaml --splits ood_test iid_test --device cpu
 #
 #   Resume training from a saved checkpoint:
-#     .\.venv\Scripts\python.exe main.py resume checkpoints\smoke.pt --config configs\experiment.yaml --epochs 1 --device cpu --save-model checkpoints\smoke_resumed.pt
+#     .\.venv\Scripts\python.exe main.py resume outputs\...\checkpoints\best_model.pt --config configs\experiment.yaml --epochs 1 --device cpu --run-name smoke_resumed
 #
 #   Run diagnostics through the consolidated CLI:
 #     .\.venv\Scripts\python.exe main.py diagnostics fragments data\processed\drugood_lbap_core_ec50_assay\group_graph --splits train ood_val ood_test
@@ -74,6 +77,21 @@
 output_root: outputs
 run_name: auto
 
+# Toggle which run artifacts are produced by `main.py full`. Run artifacts are
+# written under output_root using the consolidated run directory layout above.
+# Use CLI --no-* flags, such as --no-checkpoint or --no-training-curves, to
+# suppress individual outputs for one run without editing this file.
+save_outputs:
+  checkpoint: true
+  training_epoch_losses: true
+  final_evaluation_metrics: true
+  training_curves: true
+  preprocessing_fragmentation_diagnostics: true
+  subgraph_analysis: true
+  effective_config: true
+  run_manifest: true
+  preprocess_failures: true
+
 # Dataset identifier stored in each processed .pt file's metadata.
 # Accepted: any non-empty string. Use stable, path-safe names because this is
 # written into metadata and often used in report/checkpoint names.
@@ -106,7 +124,7 @@ preprocess_version: "0.1.0"
 # Multiple positive-count methods:
 #   stores method-prefixed fragment graph fields for each positive method.
 view_fragmentations:
-  group_graph: 3
+  group_graph: 1
   brics: 1
   recap: 1
 
@@ -267,7 +285,7 @@ num_classes: 2
 gnn_layers: 3
 hidden_dim: 128
 edge_ratio: 0.5
-num_views: 5
+num_views: 3
 dropout: 0.1
 
 # Training-time random fragment-edge sampler inside each FragmentCIGA view.
@@ -298,37 +316,16 @@ epochs: 40
 patience: 20
 device: cuda
 
-# Optional checkpoint path. Leave empty to skip saving. When set, the trainer
-# writes a full checkpoint containing:
-#   - effective config snapshot;
-#   - inferred atom/fragment feature dimensions;
-#   - one FragmentCIGA state_dict per view;
-#   - one optimizer state_dict per view, for resume training;
-#   - training history and final metrics;
-#   - greedy-selected view indices, when greedy_model_selection runs.
-# Legacy checkpoints that only contain `{view_index: state_dict}` can still be
-# loaded for evaluation/resume if the active config supplies the right model
-# architecture and feature dimensions.
-# Leave these empty when output_root is active. The run directory will provide:
+# The checkpoint, per-epoch loss CSV, and final evaluation metrics JSON are
+# always placed in the consolidated output_root run directory when their
+# save_outputs toggles are true:
 #   checkpoints/best_model.pt
-save_model:
-
-# Per-epoch CSV with total loss, component losses, weighted auxiliary
-# contributions, validation metrics, and per-view validation diagnostics.
-# Leave empty to disable. You can plot it with:
-#   .\.venv\Scripts\python.exe main.py diagnostics losses outputs\...\training_epoch_losses.csv
-loss_log_path:
-
-# Final evaluation JSON written after training. This stores the final ensemble
-# metrics for test_split/report_splits plus metadata such as dataset,
-# fragmentation, selected greedy views, checkpoint path, and feature dimensions.
-# Leave empty when output_root is active. The run directory will provide:
+#   training_epoch_losses.csv
 #   final_evaluation_metrics.json
-final_metrics_path:
 
 # Trained-checkpoint subgraph analysis defaults.
 # These are used by:
-#   .\.venv\Scripts\python.exe main.py full --config configs\experiment.yaml --subgraph-analysis
+#   .\.venv\Scripts\python.exe main.py full --config configs\experiment.yaml
 #   .\.venv\Scripts\python.exe main.py diagnostics subgraphs --config outputs\...\config\effective_config.yaml
 #
 # Leave subgraph_analysis_dir empty when output_root is active. The run

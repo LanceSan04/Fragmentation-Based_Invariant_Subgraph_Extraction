@@ -3,21 +3,29 @@ r"""Consolidated CLI for the REU SuGAr-style molecular pipeline.
 
 This entrypoint orchestrates preprocessing, FragmentCIGA/SuGAr training,
 checkpoint resume/evaluation, processed-data inspection, and diagnostics.
-Most experiment defaults come from configs/experiment.yaml; CLI flags override
-those defaults for a single run.
+Most experiment behavior comes from configs/experiment.yaml; CLI flags are for
+small one-run overrides such as epochs, device, run_name, or disabling outputs.
+
+The ``full`` command is config-driven. It preprocesses, trains, and produces
+the artifacts enabled by ``save_outputs`` in the config. Disable individual
+artifacts for one run with flags such as ``--no-checkpoint``,
+``--no-training-curves``, or ``--no-subgraph-analysis``.
 
 When ``output_root`` is configured, run artifacts are consolidated under:
 
     outputs/{dataset}/{fragmentation_recipe}/{run_name}/
 
-That run folder contains checkpoints, training logs, final metrics,
-diagnostic outputs, the effective config, and run_manifest.json. Processed
-``.pt`` split files stay under data/processed/... because they are reusable
-dataset artifacts.
+That run folder can contain checkpoints, training loss CSVs, final metrics,
+diagnostic outputs, the effective config, and run_manifest.json depending on
+``save_outputs``. Processed ``.pt`` split files stay under data/processed/...
+because they are reusable dataset artifacts.
 
 Examples:
-    # Run the full pipeline: preprocess, train, checkpoint, metrics, diagnostics
-    .\.venv\Scripts\python.exe main.py full --config configs\experiment.yaml --validate-loaders --fragment-diagnostics --loss-plots --subgraph-analysis
+    # Run the configured full pipeline: preprocess, train, enabled outputs/diagnostics
+    .\.venv\Scripts\python.exe main.py full --config configs\experiment.yaml --validate-loaders
+
+    # Run the same full pipeline but suppress selected artifacts for this run
+    .\.venv\Scripts\python.exe main.py full --config configs\experiment.yaml --no-checkpoint --no-training-curves
 
     # Preprocess the configured dataset and validate PyG loaders
     .\.venv\Scripts\python.exe main.py preprocess --config configs\experiment.yaml --validate-loaders
@@ -53,7 +61,12 @@ import yaml
 
 from src.data.dataloader import build_split_dataloaders, validate_dataloader_batch
 from train_sugar import Config, evaluate_checkpoint, run_training
-from src.utils.run_outputs import prepare_run_outputs, resolve_processed_dir, write_run_manifest
+from src.utils.run_outputs import (
+    output_enabled,
+    prepare_run_outputs,
+    resolve_processed_dir,
+    write_run_manifest,
+)
 
 
 ROOT = Path(__file__).resolve().parent
@@ -77,9 +90,6 @@ COMMON_OVERRIDES = (
     "lambda_irm",
     "num_envs",
     "env_bucket_strategy",
-    "save_model",
-    "loss_log_path",
-    "final_metrics_path",
     "output_root",
     "run_name",
     "subgraph_split",
@@ -91,6 +101,18 @@ COMMON_OVERRIDES = (
     "validation_split",
     "test_split",
 )
+
+OUTPUT_DISABLE_FLAGS = {
+    "no_checkpoint": "checkpoint",
+    "no_training_epoch_losses": "training_epoch_losses",
+    "no_final_evaluation_metrics": "final_evaluation_metrics",
+    "no_training_curves": "training_curves",
+    "no_preprocessing_fragmentation_diagnostics": "preprocessing_fragmentation_diagnostics",
+    "no_subgraph_analysis": "subgraph_analysis",
+    "no_effective_config": "effective_config",
+    "no_run_manifest": "run_manifest",
+    "no_preprocess_failures": "preprocess_failures",
+}
 
 
 def load_yaml_config(path):
@@ -108,13 +130,16 @@ def apply_common_overrides(config, args):
         if value is not None:
             merged[key] = value
 
-    explicit_output_paths = [
-        key
-        for key in ("save_model", "loss_log_path", "final_metrics_path")
-        if getattr(args, key, None) is not None
-    ]
-    if explicit_output_paths:
-        merged["_explicit_output_paths"] = explicit_output_paths
+    disabled_outputs = {
+        output_name
+        for flag_name, output_name in OUTPUT_DISABLE_FLAGS.items()
+        if getattr(args, flag_name, False)
+    }
+    if disabled_outputs:
+        save_outputs = dict(merged.get("save_outputs") or {})
+        for output_name in disabled_outputs:
+            save_outputs[output_name] = False
+        merged["save_outputs"] = save_outputs
 
     if not explicit_processed_dir and not merged.get("processed_dir"):
         resolve_processed_dir(merged)
@@ -178,7 +203,7 @@ def run_full_command(args):
 
     result = run_training(config, resume_from=getattr(args, "resume_from", None))
 
-    if args.fragment_diagnostics:
+    if output_enabled(config, "preprocessing_fragmentation_diagnostics"):
         run_fragment_diagnostics(
             processed_dir=Path(config.processed_dir),
             splits=args.diagnostic_splits or config.get("split_names", None),
@@ -194,7 +219,10 @@ def run_full_command(args):
             top_k=args.top_k,
         )
 
-    if args.loss_plots:
+    else:
+        print("preprocessing_fragmentation_diagnostics output disabled; skipping fragmentation diagnostics.")
+
+    if output_enabled(config, "training_curves"):
         loss_log = args.loss_log or config.get("loss_log_path", None)
         if loss_log:
             run_loss_diagnostics(
@@ -203,21 +231,29 @@ def run_full_command(args):
             )
         else:
             print("No loss log path configured; skipping loss plots.")
+    else:
+        print("training_curves output disabled; skipping loss plots.")
 
-    if args.subgraph_analysis:
-        run_subgraph_diagnostics(
-            config=config,
-            model_path=args.subgraph_model_path,
-            processed_dir=args.subgraph_processed_dir,
-            split=args.subgraph_split,
-            num_samples=args.subgraph_num_samples,
-            num_visualize=args.subgraph_num_visualize,
-            output_dir=args.subgraph_output_dir,
-            metric_min_available=args.subgraph_metric_min_available,
-            metric_top_k=args.subgraph_metric_top_k,
-            batch_size=args.subgraph_batch_size,
-            device=args.subgraph_device,
-        )
+    if output_enabled(config, "subgraph_analysis"):
+        model_path = args.subgraph_model_path or config.get("save_model", None)
+        if model_path:
+            run_subgraph_diagnostics(
+                config=config,
+                model_path=args.subgraph_model_path,
+                processed_dir=args.subgraph_processed_dir,
+                split=args.subgraph_split,
+                num_samples=args.subgraph_num_samples,
+                num_visualize=args.subgraph_num_visualize,
+                output_dir=args.subgraph_output_dir,
+                metric_min_available=args.subgraph_metric_min_available,
+                metric_top_k=args.subgraph_metric_top_k,
+                batch_size=args.subgraph_batch_size,
+                device=args.subgraph_device,
+            )
+        else:
+            print("No checkpoint path configured; skipping subgraph analysis.")
+    else:
+        print("subgraph_analysis output disabled; skipping subgraph analysis.")
 
     write_run_manifest(config, command_name="full")
     return result
@@ -364,9 +400,6 @@ def add_common_arguments(parser):
         dest="env_bucket_strategy",
         choices=["value", "size"],
     )
-    parser.add_argument("--save-model", dest="save_model")
-    parser.add_argument("--loss-log-path", dest="loss_log_path")
-    parser.add_argument("--final-metrics-path", dest="final_metrics_path")
     parser.add_argument("--output-root", dest="output_root")
     parser.add_argument("--run-name", dest="run_name")
     parser.add_argument("--subgraph-split", dest="subgraph_split")
@@ -381,11 +414,22 @@ def add_common_arguments(parser):
     parser.add_argument("--train-split", dest="train_split")
     parser.add_argument("--validation-split", dest="validation_split")
     parser.add_argument("--test-split", dest="test_split")
+    parser.add_argument("--no-checkpoint", dest="no_checkpoint", action="store_true")
+    parser.add_argument("--no-training-epoch-losses", dest="no_training_epoch_losses", action="store_true")
+    parser.add_argument("--no-final-evaluation-metrics", dest="no_final_evaluation_metrics", action="store_true")
+    parser.add_argument("--no-training-curves", dest="no_training_curves", action="store_true")
+    parser.add_argument(
+        "--no-preprocessing-fragmentation-diagnostics",
+        dest="no_preprocessing_fragmentation_diagnostics",
+        action="store_true",
+    )
+    parser.add_argument("--no-subgraph-analysis", dest="no_subgraph_analysis", action="store_true")
+    parser.add_argument("--no-effective-config", dest="no_effective_config", action="store_true")
+    parser.add_argument("--no-run-manifest", dest="no_run_manifest", action="store_true")
+    parser.add_argument("--no-preprocess-failures", dest="no_preprocess_failures", action="store_true")
 
 
-def add_subgraph_diagnostic_arguments(parser, include_analysis_flag=False):
-    if include_analysis_flag:
-        parser.add_argument("--subgraph-analysis", action="store_true")
+def add_subgraph_diagnostic_arguments(parser):
     parser.add_argument("--subgraph-model-path", dest="subgraph_model_path")
     parser.add_argument("--subgraph-processed-dir", dest="subgraph_processed_dir")
     parser.add_argument("--subgraph-output-dir", dest="subgraph_output_dir")
@@ -428,21 +472,19 @@ def build_parser():
     evaluate.add_argument("--output")
     evaluate.set_defaults(func=run_eval_command)
 
-    full = subparsers.add_parser("full", help="Run preprocessing, training, and optional diagnostics.")
+    full = subparsers.add_parser("full", help="Run preprocessing, training, and configured outputs.")
     add_common_arguments(full)
     full.add_argument("--resume-from", dest="resume_from")
     full.add_argument("--skip-preprocess", action="store_true")
     full.add_argument("--validate-loaders", action="store_true")
-    full.add_argument("--fragment-diagnostics", action="store_true")
     full.add_argument("--fragment-diagnostics-output")
     full.add_argument("--diagnostic-splits", nargs="+")
     full.add_argument("--max-molecules", type=int)
     full.add_argument("--top-k", type=int, default=20)
     full.add_argument("--no-plots", action="store_true")
-    full.add_argument("--loss-plots", action="store_true")
     full.add_argument("--loss-log")
     full.add_argument("--loss-output-dir")
-    add_subgraph_diagnostic_arguments(full, include_analysis_flag=True)
+    add_subgraph_diagnostic_arguments(full)
     full.set_defaults(func=run_full_command)
 
     diagnostics = subparsers.add_parser("diagnostics", help="Run report/diagnostic helpers.")

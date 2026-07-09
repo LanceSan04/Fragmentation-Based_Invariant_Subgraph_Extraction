@@ -408,6 +408,11 @@ def run_preprocessing(config):
 
 def save_failure_report(failures, config, processed_dir):
     """Write skipped records to CSV so dataset issues can be inspected later."""
+    from src.utils.run_outputs import output_enabled
+
+    if not output_enabled(config, "preprocess_failures"):
+        return None
+
     rows = []
     smiles_key = _config_get(config, "smiles_key", "smiles")
     molecule_id_key = _config_get(config, "molecule_id_key", "molecule_id")

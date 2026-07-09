@@ -11,6 +11,7 @@ import os.path as osp
 import tempfile
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
 from torch.optim import Adam
@@ -22,7 +23,7 @@ from train_sugar import (
     merge_config_and_cli,
     write_final_metrics_report,
 )
-from main import build_effective_config, build_parser
+from main import build_effective_config, build_parser, run_full_command
 from src.utils.run_outputs import prepare_run_outputs, write_run_manifest
 from src.training.checkpoint import (
     checkpoint_feature_dims,
@@ -34,14 +35,13 @@ from src.training.checkpoint import (
 
 
 class TrainConfigTests(unittest.TestCase):
-    def test_main_full_parser_accepts_subgraph_analysis_flags(self):
+    def test_main_full_parser_accepts_subgraph_configuration_options(self):
         parser = build_parser()
         args = parser.parse_args(
             [
                 "full",
                 "--config",
                 "configs/experiment.yaml",
-                "--subgraph-analysis",
                 "--subgraph-split",
                 "ood_test",
                 "--subgraph-num-samples",
@@ -55,7 +55,6 @@ class TrainConfigTests(unittest.TestCase):
             ]
         )
 
-        self.assertTrue(args.subgraph_analysis)
         self.assertEqual(args.subgraph_split, "ood_test")
         self.assertEqual(args.subgraph_num_samples, 5)
         self.assertEqual(args.subgraph_num_visualize, 2)
@@ -83,6 +82,103 @@ class TrainConfigTests(unittest.TestCase):
         self.assertEqual(args.subgraph_model_path, "outputs/run/checkpoints/best_model.pt")
         self.assertEqual(args.subgraph_processed_dir, "data/processed/example/group_graph")
         self.assertEqual(args.subgraph_output_dir, "outputs/run/subgraph_analysis")
+
+    def test_full_command_runs_enabled_configured_outputs_without_positive_flags(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = osp.join(tmp_dir, "config.yaml")
+            with open(config_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "\n".join(
+                        [
+                            "dataset: unit",
+                            f"output_root: {tmp_dir}",
+                            "run_name: full_auto_outputs",
+                            f"processed_dir: {osp.join(tmp_dir, 'processed')}",
+                            "num_views: 1",
+                            "view_fragmentations:",
+                            "  group_graph: 1",
+                            "split_names: [train]",
+                            "save_outputs:",
+                            "  checkpoint: true",
+                            "  training_epoch_losses: true",
+                            "  final_evaluation_metrics: true",
+                            "  training_curves: true",
+                            "  preprocessing_fragmentation_diagnostics: true",
+                            "  subgraph_analysis: true",
+                            "  effective_config: false",
+                            "  run_manifest: false",
+                        ]
+                    )
+                )
+
+            parser = build_parser()
+            args = parser.parse_args(["full", "--config", config_path])
+
+            with patch("src.data.preprocess.run_preprocessing") as preprocess, \
+                patch("main.run_training") as train, \
+                patch("main.run_fragment_diagnostics") as fragment_diagnostics, \
+                patch("main.run_loss_diagnostics") as loss_diagnostics, \
+                patch("main.run_subgraph_diagnostics") as subgraph_diagnostics:
+                train.return_value = {"history": {}, "metrics": {}}
+
+                run_full_command(args)
+
+            preprocess.assert_called_once()
+            fragment_diagnostics.assert_called_once()
+            loss_diagnostics.assert_called_once()
+            subgraph_diagnostics.assert_called_once()
+
+    def test_no_output_flags_disable_configured_full_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = osp.join(tmp_dir, "config.yaml")
+            with open(config_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "\n".join(
+                        [
+                            "dataset: unit",
+                            f"output_root: {tmp_dir}",
+                            "run_name: full_disabled_outputs",
+                            f"processed_dir: {osp.join(tmp_dir, 'processed')}",
+                            "num_views: 1",
+                            "view_fragmentations:",
+                            "  group_graph: 1",
+                            "split_names: [train]",
+                            "save_outputs:",
+                            "  checkpoint: true",
+                            "  training_epoch_losses: true",
+                            "  final_evaluation_metrics: true",
+                            "  training_curves: true",
+                            "  preprocessing_fragmentation_diagnostics: true",
+                            "  subgraph_analysis: true",
+                        ]
+                    )
+                )
+
+            parser = build_parser()
+            args = parser.parse_args(
+                [
+                    "full",
+                    "--config",
+                    config_path,
+                    "--no-training-curves",
+                    "--no-preprocessing-fragmentation-diagnostics",
+                    "--no-subgraph-analysis",
+                ]
+            )
+
+            with patch("src.data.preprocess.run_preprocessing") as preprocess, \
+                patch("main.run_training") as train, \
+                patch("main.run_fragment_diagnostics") as fragment_diagnostics, \
+                patch("main.run_loss_diagnostics") as loss_diagnostics, \
+                patch("main.run_subgraph_diagnostics") as subgraph_diagnostics:
+                train.return_value = {"history": {}, "metrics": {}}
+
+                run_full_command(args)
+
+            preprocess.assert_called_once()
+            fragment_diagnostics.assert_not_called()
+            loss_diagnostics.assert_not_called()
+            subgraph_diagnostics.assert_not_called()
 
     def test_cli_overrides_only_explicit_values(self):
         config = {
@@ -448,6 +544,40 @@ class TrainConfigTests(unittest.TestCase):
                 "unit_run",
             )
             self.assertEqual(str(run_dir), expected)
+
+    def test_prepare_run_outputs_respects_save_output_toggles(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = Config(
+                {
+                    "dataset": "drugood_lbap_core_ec50_assay",
+                    "view_fragmentations": {"group_graph": 5, "brics": 0, "recap": 0},
+                    "num_views": 5,
+                    "output_root": tmp_dir,
+                    "run_name": "no_optional_outputs",
+                    "save_outputs": {
+                        "checkpoint": False,
+                        "training_epoch_losses": False,
+                        "final_evaluation_metrics": False,
+                        "training_curves": False,
+                        "preprocessing_fragmentation_diagnostics": False,
+                        "subgraph_analysis": False,
+                        "effective_config": False,
+                        "run_manifest": False,
+                    },
+                }
+            )
+
+            run_dir = prepare_run_outputs(config, command_name="train")
+
+            self.assertIsNotNone(run_dir)
+            self.assertIsNone(config.save_model)
+            self.assertIsNone(config.loss_log_path)
+            self.assertIsNone(config.final_metrics_path)
+            self.assertIsNone(config.training_diagnostics_dir)
+            self.assertIsNone(config.fragmentation_diagnostics_dir)
+            self.assertIsNone(config.subgraph_analysis_dir)
+            self.assertFalse(osp.exists(osp.join(str(run_dir), "config", "effective_config.yaml")))
+            self.assertFalse(osp.exists(osp.join(str(run_dir), "run_manifest.json")))
 
     def test_main_derives_processed_dir_from_view_fragmentations(self):
         with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as handle:
