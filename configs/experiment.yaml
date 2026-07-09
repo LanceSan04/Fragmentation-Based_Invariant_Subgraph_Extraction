@@ -61,11 +61,11 @@
 # Each run directory contains:
 #
 #   checkpoints/best_model.pt
-#   logs/training_epoch_losses.csv
-#   reports/final_evaluation_metrics.json
-#   reports/training_curves/
-#   reports/preprocessing_fragmentation_diagnostics/
-#   reports/subgraph_analysis/
+#   training_epoch_losses.csv
+#   final_evaluation_metrics.json
+#   training_curves/
+#   preprocessing_fragmentation_diagnostics/
+#   subgraph_analysis/
 #   config/effective_config.yaml
 #   run_manifest.json
 #
@@ -304,15 +304,36 @@ save_model:
 # Per-epoch CSV with total loss, component losses, weighted auxiliary
 # contributions, validation metrics, and per-view validation diagnostics.
 # Leave empty to disable. You can plot it with:
-#   .\.venv\Scripts\python.exe main.py diagnostics losses outputs\...\logs\training_epoch_losses.csv
+#   .\.venv\Scripts\python.exe main.py diagnostics losses outputs\...\training_epoch_losses.csv
 loss_log_path:
 
 # Final evaluation JSON written after training. This stores the final ensemble
 # metrics for test_split/report_splits plus metadata such as dataset,
 # fragmentation, selected greedy views, checkpoint path, and feature dimensions.
 # Leave empty when output_root is active. The run directory will provide:
-#   reports/final_evaluation_metrics.json
+#   final_evaluation_metrics.json
 final_metrics_path:
+
+# Trained-checkpoint subgraph analysis defaults.
+# These are used by:
+#   .\.venv\Scripts\python.exe main.py full --config configs\experiment.yaml --subgraph-analysis
+#   .\.venv\Scripts\python.exe main.py diagnostics subgraphs --config outputs\...\config\effective_config.yaml
+#
+# Leave subgraph_analysis_dir empty when output_root is active. The run
+# directory will provide:
+#   subgraph_analysis/
+#
+# subgraph_split defaults to test_split when empty.
+# subgraph_num_samples empty/null analyzes the full selected split.
+# subgraph_num_visualize accepted: integer >= 0. Use 0 to skip molecule PNGs.
+# subgraph_metric_min_available filters interpretation tables by support.
+# subgraph_metric_top_k accepted: integer; <=0 keeps all ranked rows.
+subgraph_analysis_dir:
+subgraph_split: ood_test
+subgraph_num_samples:
+subgraph_num_visualize: 10
+subgraph_metric_min_available: 10
+subgraph_metric_top_k: 25
 
 # Auxiliary loss settings.
 # Prediction-only baseline is active below: contrastive, diversity, and IRM
@@ -344,13 +365,13 @@ final_metrics_path:
 # span a size gradient. Accepted: value | size.
 # contrast_temperature accepted: positive float. Practical range: 0.1-1.0.
 # contrast_sampling accepted: mul | var | cnc.
-lambda_contrast: 0.0
-lambda_diversity: 0.0
-lambda_irm: 0.0
-num_envs: 1
+lambda_contrast: 0.1
+lambda_diversity: 4.0
+lambda_irm: 4.0
+num_envs: 4
 env_split_key: domain_id
 env_bucket_strategy: size
-contrast_temperature: 1
+contrast_temperature: 0.1
 contrast_sampling: mul
 
 # When true and scikit-learn is installed, validation/model selection prefers

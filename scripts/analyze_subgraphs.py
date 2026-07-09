@@ -34,19 +34,22 @@ CLI options:
         Directory containing processed split .pt files. Defaults to processed_dir
         from config.
     --split NAME
-        Split to analyze. Defaults to the config test_split or "test".
+        Split to analyze. Defaults to subgraph_split from config, then
+        test_split, then "test".
     --num_samples N
         Optional cap on molecules analyzed. Default: all molecules in the split.
     --num_visualize N
-        Number of molecule visualization PNGs to write. Default: 3.
+        Number of molecule visualization PNGs to write. Defaults to
+        subgraph_num_visualize from config, then 3.
     --output_dir PATH
         Output directory for CSVs and plots. Defaults to subgraph_analysis_dir
         from config, then results/subgraph_analysis.
     --metric_min_available N
-        Minimum available_count required for interpretation tables. Default: 10.
+        Minimum available_count required for interpretation tables. Defaults to
+        subgraph_metric_min_available from config, then 10.
     --metric_top_k N
         Rows to keep in each ranked interpretation table. Use <=0 to keep all.
-        Default: 25.
+        Defaults to subgraph_metric_top_k from config, then 25.
     --batch_size N
         Override analysis DataLoader batch size.
     --device {cpu,cuda}
@@ -103,6 +106,7 @@ from train_sugar import (
     align_num_views_to_checkpoint,
     apply_checkpoint_defaults,
     build_config,
+    Config,
     build_views_from_feature_dims,
     infer_feature_dimensions,
     resolve_device,
@@ -944,6 +948,197 @@ def _safe_filename(text):
     return cleaned[:40] or "mol"
 
 
+def _config_value(config, key, default=None):
+    if isinstance(config, dict):
+        return config.get(key, default)
+    return getattr(config, key, default)
+
+
+def _set_config_value(config, key, value):
+    if value is None:
+        return
+    if isinstance(config, dict):
+        config[key] = value
+    else:
+        setattr(config, key, value)
+
+
+def _int_option(config, key, default):
+    value = _config_value(config, key, default)
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
+def _optional_int_option(config, key):
+    value = _config_value(config, key, None)
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+def resolve_subgraph_analysis_options(
+    config,
+    *,
+    model_path=None,
+    processed_dir=None,
+    split=None,
+    num_samples=None,
+    num_visualize=None,
+    output_dir=None,
+    metric_min_available=None,
+    metric_top_k=None,
+    batch_size=None,
+    device=None,
+):
+    """Resolve subgraph-analysis settings from explicit args, config, then defaults."""
+    if not isinstance(config, Config):
+        config = Config(config)
+
+    _set_config_value(config, "model_path", model_path)
+    _set_config_value(config, "processed_dir", processed_dir)
+    _set_config_value(config, "batch_size", batch_size)
+    _set_config_value(config, "device", device)
+
+    resolved_model_path = _config_value(config, "model_path") or _config_value(config, "save_model")
+    if not resolved_model_path:
+        raise ValueError(
+            "No checkpoint specified: pass --model_path/--model-path or set "
+            "model_path/save_model in the config."
+        )
+
+    resolved_processed_dir = _config_value(config, "processed_dir")
+    if not resolved_processed_dir:
+        raise ValueError(
+            "No data directory specified: pass --processed_dir/--processed-dir or "
+            "set processed_dir in the config."
+        )
+
+    resolved_split = (
+        split
+        or _config_value(config, "subgraph_split", None)
+        or _config_value(config, "test_split", "test")
+    )
+    resolved_output_dir = (
+        output_dir
+        or _config_value(config, "subgraph_analysis_dir", None)
+        or "results/subgraph_analysis"
+    )
+    return {
+        "config": config,
+        "model_path": resolved_model_path,
+        "processed_dir": resolved_processed_dir,
+        "split": resolved_split,
+        "num_samples": (
+            int(num_samples)
+            if num_samples is not None
+            else _optional_int_option(config, "subgraph_num_samples")
+        ),
+        "num_visualize": (
+            int(num_visualize)
+            if num_visualize is not None
+            else _int_option(config, "subgraph_num_visualize", 3)
+        ),
+        "output_dir": Path(resolved_output_dir),
+        "metric_min_available": (
+            int(metric_min_available)
+            if metric_min_available is not None
+            else _int_option(config, "subgraph_metric_min_available", 10)
+        ),
+        "metric_top_k": (
+            int(metric_top_k)
+            if metric_top_k is not None
+            else _int_option(config, "subgraph_metric_top_k", 25)
+        ),
+    }
+
+
+def run_subgraph_analysis(
+    config,
+    *,
+    model_path=None,
+    processed_dir=None,
+    split=None,
+    num_samples=None,
+    num_visualize=None,
+    output_dir=None,
+    metric_min_available=None,
+    metric_top_k=None,
+    batch_size=None,
+    device=None,
+):
+    """Run trained-checkpoint subgraph analysis using config-backed defaults."""
+    options = resolve_subgraph_analysis_options(
+        config,
+        model_path=model_path,
+        processed_dir=processed_dir,
+        split=split,
+        num_samples=num_samples,
+        num_visualize=num_visualize,
+        output_dir=output_dir,
+        metric_min_available=metric_min_available,
+        metric_top_k=metric_top_k,
+        batch_size=batch_size,
+        device=device,
+    )
+    config = options["config"]
+
+    _set_config_value(config, "model_path", options["model_path"])
+    _set_config_value(config, "processed_dir", options["processed_dir"])
+
+    device = resolve_device(config)
+    print(f"Using device: {device}")
+
+    ensemble, dataloaders = load_ensemble(config, options["model_path"], device)
+
+    split = options["split"]
+    loader = dataloaders.get(split)
+    if loader is None:
+        available = ", ".join(sorted(dataloaders)) or "none"
+        raise ValueError(f"Split {split!r} not found. Available splits: {available}")
+
+    print(f"Extracting subgraphs from split {split!r}...")
+    records = collect_subgraph_records(
+        ensemble,
+        loader,
+        device,
+        num_samples=options["num_samples"],
+    )
+    if not records:
+        print("No molecules found in the selected split.")
+        return {
+            "records": records,
+            "output_dir": options["output_dir"],
+            "split": split,
+        }
+
+    num_views = records[0]["num_views"]
+    output_dir = options["output_dir"]
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print_summary(records)
+    fragment_rows, edge_rows = write_fragment_selection_metrics(records, output_dir)
+    interpretation_paths = write_fragment_interpretation_tables(
+        fragment_rows,
+        edge_rows,
+        output_dir,
+        min_available=options["metric_min_available"],
+        top_k=options["metric_top_k"],
+    )
+    plot_agreement_heatmap(records, output_dir, num_views)
+    visualize_molecules(records, output_dir, options["num_visualize"])
+    print(f"\nDone. Outputs in {output_dir}")
+    return {
+        "records": records,
+        "fragment_rows": fragment_rows,
+        "edge_rows": edge_rows,
+        "interpretation_paths": interpretation_paths,
+        "output_dir": output_dir,
+        "split": split,
+        "num_views": num_views,
+    }
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -964,18 +1159,18 @@ def parse_args():
     )
     parser.add_argument("--split", type=str, default=None, help="Split to analyze (default: test)")
     parser.add_argument("--num_samples", type=int, default=None, help="Max molecules (default: all)")
-    parser.add_argument("--num_visualize", type=int, default=3)
+    parser.add_argument("--num_visualize", type=int, default=None)
     parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument(
         "--metric_min_available",
         type=int,
-        default=10,
+        default=None,
         help="Minimum available_count required for interpretation tables.",
     )
     parser.add_argument(
         "--metric_top_k",
         type=int,
-        default=25,
+        default=None,
         help="Rows to keep in each ranked interpretation table; <=0 keeps all rows.",
     )
     parser.add_argument("--batch_size", type=int, default=None)
@@ -986,56 +1181,19 @@ def parse_args():
 def main():
     args = parse_args()
     config = build_config(args)
-
-    # CLI values are merged into the config by build_config, so config lookups
-    # cover both --model_path/--processed_dir and YAML-provided defaults.
-    model_path = config.get("model_path") or config.get("save_model")
-    if not model_path:
-        raise ValueError(
-            "No checkpoint specified: pass --model_path or set model_path/save_model in the config."
-        )
-    if not config.get("processed_dir"):
-        raise ValueError(
-            "No data directory specified: pass --processed_dir or set processed_dir in the config."
-        )
-
-    device = resolve_device(config)
-    print(f"Using device: {device}")
-
-    ensemble, dataloaders = load_ensemble(config, model_path, device)
-
-    split = args.split or config.get("test_split", "test")
-    loader = dataloaders.get(split)
-    if loader is None:
-        available = ", ".join(sorted(dataloaders)) or "none"
-        raise ValueError(f"Split {split!r} not found. Available splits: {available}")
-
-    print(f"Extracting subgraphs from split {split!r}...")
-    records = collect_subgraph_records(ensemble, loader, device, num_samples=args.num_samples)
-    if not records:
-        print("No molecules found in the selected split.")
-        return
-
-    num_views = records[0]["num_views"]
-    output_dir = Path(
-        args.output_dir
-        or config.get("subgraph_analysis_dir", None)
-        or "results/subgraph_analysis"
+    run_subgraph_analysis(
+        config,
+        model_path=args.model_path,
+        processed_dir=args.processed_dir,
+        split=args.split,
+        num_samples=args.num_samples,
+        num_visualize=args.num_visualize,
+        output_dir=args.output_dir,
+        metric_min_available=args.metric_min_available,
+        metric_top_k=args.metric_top_k,
+        batch_size=args.batch_size,
+        device=args.device,
     )
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    print_summary(records)
-    fragment_rows, edge_rows = write_fragment_selection_metrics(records, output_dir)
-    write_fragment_interpretation_tables(
-        fragment_rows,
-        edge_rows,
-        output_dir,
-        min_available=args.metric_min_available,
-        top_k=args.metric_top_k,
-    )
-    plot_agreement_heatmap(records, output_dir, num_views)
-    visualize_molecules(records, output_dir, args.num_visualize)
-    print(f"\nDone. Outputs in {output_dir}")
 
 
 if __name__ == "__main__":

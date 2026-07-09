@@ -17,7 +17,7 @@ dataset artifacts.
 
 Examples:
     # Run the full pipeline: preprocess, train, checkpoint, metrics, diagnostics
-    .\.venv\Scripts\python.exe main.py full --config configs\experiment.yaml --validate-loaders --fragment-diagnostics --loss-plots
+    .\.venv\Scripts\python.exe main.py full --config configs\experiment.yaml --validate-loaders --fragment-diagnostics --loss-plots --subgraph-analysis
 
     # Preprocess the configured dataset and validate PyG loaders
     .\.venv\Scripts\python.exe main.py preprocess --config configs\experiment.yaml --validate-loaders
@@ -36,6 +36,9 @@ Examples:
 
     # Plot loss logs
     .\.venv\Scripts\python.exe main.py diagnostics losses outputs\...\training_epoch_losses.csv --output-dir outputs\...\training_curves
+
+    # Analyze trained invariant subgraphs from a saved run config
+    .\.venv\Scripts\python.exe main.py diagnostics subgraphs --config outputs\...\config\effective_config.yaml --subgraph-split ood_test
 
     # Inspect one processed molecule record
     .\.venv\Scripts\python.exe main.py inspect data\processed\drugood_lbap_core_ec50_assay\group_graph --splits train --index 0
@@ -79,6 +82,11 @@ COMMON_OVERRIDES = (
     "final_metrics_path",
     "output_root",
     "run_name",
+    "subgraph_split",
+    "subgraph_num_samples",
+    "subgraph_num_visualize",
+    "subgraph_metric_min_available",
+    "subgraph_metric_top_k",
     "train_split",
     "validation_split",
     "test_split",
@@ -201,6 +209,21 @@ def run_full_command(args):
         else:
             print("No loss log path configured; skipping loss plots.")
 
+    if args.subgraph_analysis:
+        run_subgraph_diagnostics(
+            config=config,
+            model_path=args.subgraph_model_path,
+            processed_dir=args.subgraph_processed_dir,
+            split=args.subgraph_split,
+            num_samples=args.subgraph_num_samples,
+            num_visualize=args.subgraph_num_visualize,
+            output_dir=args.subgraph_output_dir,
+            metric_min_available=args.subgraph_metric_min_available,
+            metric_top_k=args.subgraph_metric_top_k,
+            batch_size=args.subgraph_batch_size,
+            device=args.subgraph_device,
+        )
+
     write_run_manifest(config, command_name="full")
     return result
 
@@ -281,6 +304,37 @@ def run_loss_diagnostics(loss_log, output_dir):
         print(f"Wrote {len(plot_paths)} plot(s)")
 
 
+def run_subgraph_diagnostics(
+    config=None,
+    *,
+    model_path=None,
+    processed_dir=None,
+    split=None,
+    num_samples=None,
+    num_visualize=None,
+    output_dir=None,
+    metric_min_available=None,
+    metric_top_k=None,
+    batch_size=None,
+    device=None,
+):
+    from scripts.analyze_subgraphs import run_subgraph_analysis
+
+    return run_subgraph_analysis(
+        config or {},
+        model_path=model_path,
+        processed_dir=processed_dir,
+        split=split,
+        num_samples=num_samples,
+        num_visualize=num_visualize,
+        output_dir=output_dir,
+        metric_min_available=metric_min_available,
+        metric_top_k=metric_top_k,
+        batch_size=batch_size,
+        device=device,
+    )
+
+
 def run_inspect_command(args):
     from scripts.inspect_processed_pt import load_payload, paths_to_inspect, print_sectioned_record
 
@@ -320,9 +374,28 @@ def add_common_arguments(parser):
     parser.add_argument("--final-metrics-path", dest="final_metrics_path")
     parser.add_argument("--output-root", dest="output_root")
     parser.add_argument("--run-name", dest="run_name")
+    parser.add_argument("--subgraph-split", dest="subgraph_split")
+    parser.add_argument("--subgraph-num-samples", dest="subgraph_num_samples", type=int)
+    parser.add_argument("--subgraph-num-visualize", dest="subgraph_num_visualize", type=int)
+    parser.add_argument(
+        "--subgraph-metric-min-available",
+        dest="subgraph_metric_min_available",
+        type=int,
+    )
+    parser.add_argument("--subgraph-metric-top-k", dest="subgraph_metric_top_k", type=int)
     parser.add_argument("--train-split", dest="train_split")
     parser.add_argument("--validation-split", dest="validation_split")
     parser.add_argument("--test-split", dest="test_split")
+
+
+def add_subgraph_diagnostic_arguments(parser, include_analysis_flag=False):
+    if include_analysis_flag:
+        parser.add_argument("--subgraph-analysis", action="store_true")
+    parser.add_argument("--subgraph-model-path", dest="subgraph_model_path")
+    parser.add_argument("--subgraph-processed-dir", dest="subgraph_processed_dir")
+    parser.add_argument("--subgraph-output-dir", dest="subgraph_output_dir")
+    parser.add_argument("--subgraph-batch-size", dest="subgraph_batch_size", type=int)
+    parser.add_argument("--subgraph-device", dest="subgraph_device")
 
 
 def build_parser():
@@ -374,6 +447,7 @@ def build_parser():
     full.add_argument("--loss-plots", action="store_true")
     full.add_argument("--loss-log")
     full.add_argument("--loss-output-dir")
+    add_subgraph_diagnostic_arguments(full, include_analysis_flag=True)
     full.set_defaults(func=run_full_command)
 
     diagnostics = subparsers.add_parser("diagnostics", help="Run report/diagnostic helpers.")
@@ -401,6 +475,28 @@ def build_parser():
     losses.add_argument("loss_log")
     losses.add_argument("--output-dir", default="reports/training_diagnostics")
     losses.set_defaults(func=lambda args: run_loss_diagnostics(args.loss_log, args.output_dir))
+
+    subgraphs = diagnostic_subparsers.add_parser(
+        "subgraphs",
+        help="Analyze invariant subgraphs from a trained checkpoint.",
+    )
+    add_common_arguments(subgraphs)
+    add_subgraph_diagnostic_arguments(subgraphs)
+    subgraphs.set_defaults(
+        func=lambda args: run_subgraph_diagnostics(
+            config=build_effective_config(args),
+            model_path=args.subgraph_model_path,
+            processed_dir=args.subgraph_processed_dir,
+            split=args.subgraph_split,
+            num_samples=args.subgraph_num_samples,
+            num_visualize=args.subgraph_num_visualize,
+            output_dir=args.subgraph_output_dir,
+            metric_min_available=args.subgraph_metric_min_available,
+            metric_top_k=args.subgraph_metric_top_k,
+            batch_size=args.subgraph_batch_size,
+            device=args.subgraph_device,
+        )
+    )
 
     inspect = subparsers.add_parser("inspect", help="Inspect processed .pt files.")
     inspect.add_argument("path")

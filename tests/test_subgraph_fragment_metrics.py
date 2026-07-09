@@ -1,12 +1,74 @@
 import unittest
+from pathlib import Path
 
 from scripts.analyze_subgraphs import (
     build_fragment_interpretation_tables,
     build_fragment_selection_metric_rows,
+    resolve_subgraph_analysis_options,
 )
+from train_sugar import Config
 
 
 class SubgraphFragmentMetricTests(unittest.TestCase):
+    def test_subgraph_analysis_options_use_config_defaults(self):
+        config = Config(
+            {
+                "save_model": "outputs/run/checkpoints/best_model.pt",
+                "processed_dir": "data/processed/example/group_graph",
+                "test_split": "ood_test",
+                "subgraph_analysis_dir": "outputs/run/subgraph_analysis",
+                "subgraph_num_visualize": 7,
+                "subgraph_metric_min_available": 12,
+                "subgraph_metric_top_k": 30,
+            }
+        )
+
+        options = resolve_subgraph_analysis_options(config)
+
+        self.assertEqual(options["model_path"], "outputs/run/checkpoints/best_model.pt")
+        self.assertEqual(options["processed_dir"], "data/processed/example/group_graph")
+        self.assertEqual(options["split"], "ood_test")
+        self.assertEqual(str(options["output_dir"]), str(Path("outputs/run/subgraph_analysis")))
+        self.assertIsNone(options["num_samples"])
+        self.assertEqual(options["num_visualize"], 7)
+        self.assertEqual(options["metric_min_available"], 12)
+        self.assertEqual(options["metric_top_k"], 30)
+
+    def test_subgraph_analysis_options_prefer_explicit_over_config(self):
+        config = Config(
+            {
+                "save_model": "config_checkpoint.pt",
+                "processed_dir": "config_processed",
+                "subgraph_split": "iid_test",
+                "subgraph_analysis_dir": "config_output",
+                "subgraph_num_samples": 100,
+                "subgraph_num_visualize": 3,
+                "subgraph_metric_min_available": 10,
+                "subgraph_metric_top_k": 25,
+            }
+        )
+
+        options = resolve_subgraph_analysis_options(
+            config,
+            model_path="explicit_checkpoint.pt",
+            processed_dir="explicit_processed",
+            split="ood_test",
+            num_samples=5,
+            num_visualize=2,
+            output_dir="explicit_output",
+            metric_min_available=4,
+            metric_top_k=6,
+        )
+
+        self.assertEqual(options["model_path"], "explicit_checkpoint.pt")
+        self.assertEqual(options["processed_dir"], "explicit_processed")
+        self.assertEqual(options["split"], "ood_test")
+        self.assertEqual(options["num_samples"], 5)
+        self.assertEqual(options["num_visualize"], 2)
+        self.assertEqual(str(options["output_dir"]), "explicit_output")
+        self.assertEqual(options["metric_min_available"], 4)
+        self.assertEqual(options["metric_top_k"], 6)
+
     def test_fragment_metrics_are_label_and_source_aware(self):
         records = [
             {

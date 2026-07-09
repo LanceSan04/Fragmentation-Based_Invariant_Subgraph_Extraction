@@ -22,6 +22,7 @@ from train_sugar import (
     merge_config_and_cli,
     write_final_metrics_report,
 )
+from main import build_parser
 from src.utils.run_outputs import prepare_run_outputs, write_run_manifest
 from src.training.checkpoint import (
     checkpoint_feature_dims,
@@ -33,6 +34,56 @@ from src.training.checkpoint import (
 
 
 class TrainConfigTests(unittest.TestCase):
+    def test_main_full_parser_accepts_subgraph_analysis_flags(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "full",
+                "--config",
+                "configs/experiment.yaml",
+                "--subgraph-analysis",
+                "--subgraph-split",
+                "ood_test",
+                "--subgraph-num-samples",
+                "5",
+                "--subgraph-num-visualize",
+                "2",
+                "--subgraph-metric-min-available",
+                "4",
+                "--subgraph-metric-top-k",
+                "6",
+            ]
+        )
+
+        self.assertTrue(args.subgraph_analysis)
+        self.assertEqual(args.subgraph_split, "ood_test")
+        self.assertEqual(args.subgraph_num_samples, 5)
+        self.assertEqual(args.subgraph_num_visualize, 2)
+        self.assertEqual(args.subgraph_metric_min_available, 4)
+        self.assertEqual(args.subgraph_metric_top_k, 6)
+
+    def test_main_diagnostics_subgraphs_parser_accepts_checkpoint_paths(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "diagnostics",
+                "subgraphs",
+                "--config",
+                "outputs/run/config/effective_config.yaml",
+                "--subgraph-model-path",
+                "outputs/run/checkpoints/best_model.pt",
+                "--subgraph-processed-dir",
+                "data/processed/example/group_graph",
+                "--subgraph-output-dir",
+                "outputs/run/subgraph_analysis",
+            ]
+        )
+
+        self.assertEqual(args.diagnostic_command, "subgraphs")
+        self.assertEqual(args.subgraph_model_path, "outputs/run/checkpoints/best_model.pt")
+        self.assertEqual(args.subgraph_processed_dir, "data/processed/example/group_graph")
+        self.assertEqual(args.subgraph_output_dir, "outputs/run/subgraph_analysis")
+
     def test_cli_overrides_only_explicit_values(self):
         config = {
             "processed_dir": "data/processed/bbbp/group_graph",
