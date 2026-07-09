@@ -80,11 +80,11 @@ def resolve_run_directory(config, command_name="run"):
     explicit = set(get_config_value(config, "_explicit_output_paths", []) or [])
     default_paths = {
         "save_model": run_dir / "checkpoints" / "best_model.pt",
-        "loss_log_path": run_dir / "logs" / "training_epoch_losses.csv",
-        "final_metrics_path": run_dir / "reports" / "final_evaluation_metrics.json",
-        "training_diagnostics_dir": run_dir / "reports" / "training_curves",
-        "fragmentation_diagnostics_dir": run_dir / "reports" / "preprocessing_fragmentation_diagnostics",
-        "subgraph_analysis_dir": run_dir / "reports" / "subgraph_analysis",
+        "loss_log_path": run_dir / "training_epoch_losses.csv",
+        "final_metrics_path": run_dir / "final_evaluation_metrics.json",
+        "training_diagnostics_dir": run_dir / "training_curves",
+        "fragmentation_diagnostics_dir": run_dir / "preprocessing_fragmentation_diagnostics",
+        "subgraph_analysis_dir": run_dir / "subgraph_analysis",
     }
     for key, path in default_paths.items():
         if key not in explicit:

@@ -11,7 +11,7 @@ When ``output_root`` is configured, run artifacts are consolidated under:
     outputs/{dataset}/{fragmentation}/{run_name}/
 
 That run folder contains checkpoints, training logs, final metrics,
-diagnostic reports, the effective config, and run_manifest.json. Processed
+diagnostic outputs, the effective config, and run_manifest.json. Processed
 ``.pt`` split files stay under data/processed/... because they are reusable
 dataset artifacts.
 
@@ -35,7 +35,7 @@ Examples:
     .\.venv\Scripts\python.exe main.py diagnostics fragments data\processed\drugood_lbap_core_ec50_assay\group_graph --splits train ood_val ood_test --output-dir outputs\manual\group_graph_fragmentation_diagnostics
 
     # Plot loss logs
-    .\.venv\Scripts\python.exe main.py diagnostics losses outputs\...\logs\training_epoch_losses.csv --output-dir outputs\...\reports\training_curves
+    .\.venv\Scripts\python.exe main.py diagnostics losses outputs\...\training_epoch_losses.csv --output-dir outputs\...\training_curves
 
     # Inspect one processed molecule record
     .\.venv\Scripts\python.exe main.py inspect data\processed\drugood_lbap_core_ec50_assay\group_graph --splits train --index 0

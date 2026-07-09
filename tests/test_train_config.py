@@ -290,11 +290,23 @@ class TrainConfigTests(unittest.TestCase):
             self.assertEqual(config.save_model, osp.join(expected, "checkpoints", "best_model.pt"))
             self.assertEqual(
                 config.loss_log_path,
-                osp.join(expected, "logs", "training_epoch_losses.csv"),
+                osp.join(expected, "training_epoch_losses.csv"),
             )
             self.assertEqual(
                 config.final_metrics_path,
-                osp.join(expected, "reports", "final_evaluation_metrics.json"),
+                osp.join(expected, "final_evaluation_metrics.json"),
+            )
+            self.assertEqual(
+                config.training_diagnostics_dir,
+                osp.join(expected, "training_curves"),
+            )
+            self.assertEqual(
+                config.fragmentation_diagnostics_dir,
+                osp.join(expected, "preprocessing_fragmentation_diagnostics"),
+            )
+            self.assertEqual(
+                config.subgraph_analysis_dir,
+                osp.join(expected, "subgraph_analysis"),
             )
             self.assertTrue(osp.exists(osp.join(expected, "config", "effective_config.yaml")))
             self.assertTrue(osp.exists(manifest_path))
