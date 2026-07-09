@@ -3,6 +3,18 @@
 import torch
 from torch_geometric.data import Data
 
+from src.data.pyg_batch import fragment_view_field
+
+
+def get_fragment_view_value(molecule_data, field, method=None):
+    """Read a default or method-specific fragment field from a molecule batch."""
+    name = fragment_view_field(method, field)
+    if hasattr(molecule_data, name):
+        return getattr(molecule_data, name)
+    if method is None:
+        raise AttributeError(f"molecule data is missing fragment field {field!r}")
+    raise AttributeError(f"molecule data is missing {method!r} fragment field {field!r}")
+
 
 def build_fragment_graph(molecule_data, fragmentation_result):
     """Build a fragment-level graph from molecule data and fragmentation.
@@ -35,7 +47,7 @@ def build_fragment_graph(molecule_data, fragmentation_result):
     return fragment_graph
 
 
-def build_fragment_graph_batch(molecule_batch):
+def build_fragment_graph_batch(molecule_batch, method=None):
     """Build a batched fragment-level graph directly from DataLoader batch tensors.
 
     Args:
@@ -45,12 +57,12 @@ def build_fragment_graph_batch(molecule_batch):
         Data: Batched PyG Data for fragment-level graph with batch assignment
     """
     batched = Data(
-        x=molecule_batch.fragment_x_static,
-        edge_index=molecule_batch.fragment_edge_index,
-        edge_attr=molecule_batch.fragment_edge_attr,
-        batch=molecule_batch.fragment_x_static_batch,
+        x=get_fragment_view_value(molecule_batch, "fragment_x_static", method),
+        edge_index=get_fragment_view_value(molecule_batch, "fragment_edge_index", method),
+        edge_attr=get_fragment_view_value(molecule_batch, "fragment_edge_attr", method),
+        batch=get_fragment_view_value(molecule_batch, "fragment_x_static_batch", method),
         y=molecule_batch.y,
-        num_nodes=molecule_batch.fragment_x_static.size(0),
+        num_nodes=get_fragment_view_value(molecule_batch, "fragment_x_static", method).size(0),
     )
     batched.full_fragment_edge_id = torch.arange(
         batched.edge_index.size(1),

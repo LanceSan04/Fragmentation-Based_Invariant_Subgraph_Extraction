@@ -90,6 +90,7 @@ class FragmentCIGA(nn.Module):
         atom_edge_dim=BOND_FDIM,
         fragment_sample_ratio=1.0,
         sampler_seed=None,
+        fragmentation_method=None,
     ):
         super().__init__()
         if fragment_feature_dim is None:
@@ -99,6 +100,7 @@ class FragmentCIGA(nn.Module):
             keep_ratio=fragment_sample_ratio,
             seed=sampler_seed,
         )
+        self.fragmentation_method = fragmentation_method
         self.fragment_masker = FragmentMasker(
             input_dim=fragment_feature_dim,
             hidden_dim=gnn_hidden_dim,
@@ -135,7 +137,10 @@ class FragmentCIGA(nn.Module):
         """
         device = batch_data.x.device
         if fragment_batch is None:
-            fragment_batch = build_fragment_graph_batch(batch_data).to(device)
+            fragment_batch = build_fragment_graph_batch(
+                batch_data,
+                method=self.fragmentation_method,
+            ).to(device)
 
         sampled_fragment_batch, eligible_mask = self.fragment_edge_sampler(fragment_batch)
         sampled_edge_scores, sampled_bool_mask = self.fragment_masker(sampled_fragment_batch)
@@ -156,7 +161,10 @@ class FragmentCIGA(nn.Module):
         )
 
         atom_batch = reconstruct_batch_fast(
-            batch_data, bool_mask, selected_fragment_edge_weight=edge_scores
+            batch_data,
+            bool_mask,
+            selected_fragment_edge_weight=edge_scores,
+            fragmentation_method=self.fragmentation_method,
         )
 
         logits, h_graph = self.atom_classifier(atom_batch, return_embeddings=True)
@@ -170,6 +178,7 @@ class FragmentCIGA(nn.Module):
                 "fragment_edge_eligible": eligible_mask.to(
                     device=edge_scores.device, dtype=torch.bool
                 ),
+                "fragmentation_method": self.fragmentation_method,
                 "logits": logits,
             }
         return predictions
@@ -184,7 +193,10 @@ class FragmentCIGA(nn.Module):
             Batched reconstructed atom-level PyG Data
         """
         device = batch_data.x.device
-        fragment_batch = build_fragment_graph_batch(batch_data).to(device)
+        fragment_batch = build_fragment_graph_batch(
+            batch_data,
+            method=self.fragmentation_method,
+        ).to(device)
         sampled_fragment_batch, _ = self.fragment_edge_sampler(fragment_batch)
         sampled_edge_scores, sampled_bool_mask = self.fragment_masker(sampled_fragment_batch)
         full_mask, edge_scores = restore_full_edge_outputs(
@@ -193,4 +205,9 @@ class FragmentCIGA(nn.Module):
             sampled_bool_mask,
             sampled_edge_scores,
         )
-        return reconstruct_batch(batch_data, full_mask, selected_fragment_edge_weight=edge_scores)
+        return reconstruct_batch(
+            batch_data,
+            full_mask,
+            selected_fragment_edge_weight=edge_scores,
+            fragmentation_method=self.fragmentation_method,
+        )

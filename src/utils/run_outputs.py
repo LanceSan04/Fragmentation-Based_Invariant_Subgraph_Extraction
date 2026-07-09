@@ -7,6 +7,8 @@ from pathlib import Path
 
 import yaml
 
+from src.fragmentation.multi_view import fragmentation_recipe_label, unique_fragmentation_methods
+
 
 def config_to_dict(config):
     if config is None:
@@ -40,9 +42,22 @@ def safe_path_part(value, fallback="unknown"):
     return "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in text)
 
 
+def resolve_processed_dir(config):
+    """Fill processed_dir from processed_root/dataset/fragmentation recipe when empty."""
+    processed_dir = get_config_value(config, "processed_dir", None)
+    if processed_dir:
+        return Path(processed_dir)
+
+    processed_root = get_config_value(config, "processed_root", None) or "data/processed"
+    dataset = safe_path_part(get_config_value(config, "dataset", "dataset"))
+    path = Path(processed_root) / dataset / safe_path_part(fragmentation_recipe_label(config))
+    set_config_value(config, "processed_dir", str(path))
+    return path
+
+
 def auto_run_name(config, command_name="run"):
     dataset = safe_path_part(get_config_value(config, "dataset", "dataset"))
-    fragmentation = safe_path_part(get_config_value(config, "fragmentation", "fragmentation"))
+    fragmentation = safe_path_part(fragmentation_recipe_label(config), "fragmentation")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return f"{dataset}__{fragmentation}__{command_name}__{timestamp}"
 
@@ -68,7 +83,7 @@ def resolve_run_directory(config, command_name="run"):
         return None
 
     dataset = safe_path_part(get_config_value(config, "dataset", "dataset"))
-    fragmentation = safe_path_part(get_config_value(config, "fragmentation", "fragmentation"))
+    fragmentation = safe_path_part(fragmentation_recipe_label(config), "fragmentation")
     run_name = get_config_value(config, "run_name", None)
     if not run_name or str(run_name).lower() == "auto":
         run_name = auto_run_name(config, command_name=command_name)
@@ -110,7 +125,9 @@ def build_manifest(config, command_name="run", extra=None):
     manifest = {
         "command": command_name,
         "dataset": data.get("dataset"),
-        "fragmentation": data.get("fragmentation"),
+        "fragmentation": fragmentation_recipe_label(data),
+        "view_fragmentations": data.get("view_fragmentations"),
+        "view_fragmentation_methods": unique_fragmentation_methods(data),
         "run_name": data.get("run_name"),
         "run_dir": data.get("run_dir"),
         "processed_dir": data.get("processed_dir"),

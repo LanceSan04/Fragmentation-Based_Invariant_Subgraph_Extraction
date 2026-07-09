@@ -16,6 +16,12 @@ import torch
 from torch_geometric.loader import DataLoader
 
 from src.data.config_hash import preprocessing_config_hash
+from src.data.pyg_batch import fragment_view_field
+from src.fragmentation.multi_view import (
+    fragmentation_recipe_label,
+    unique_fragmentation_methods,
+    uses_mixed_fragmentations,
+)
 
 
 class ProcessedMoleculeDataset:
@@ -116,7 +122,7 @@ def build_split_dataloaders(processed_dir, config):
     num_workers = _config_get(config, "num_workers", 0)
     pin_memory = _config_get(config, "pin_memory", False)
     seed = _config_get(config, "seed", None)
-    follow_batch = _config_get(config, "follow_batch", ["fragment_x_static"])
+    follow_batch = configured_follow_batch(config)
 
     train_split = _config_get(config, "train_split", "train")
 
@@ -171,6 +177,17 @@ def configured_split_names(config):
     return names
 
 
+def configured_follow_batch(config):
+    """Return follow_batch fields, including method-specific fragment features."""
+    fields = list(_config_get(config, "follow_batch", ["fragment_x_static"]) or [])
+    if uses_mixed_fragmentations(config):
+        for method in unique_fragmentation_methods(config):
+            field = fragment_view_field(method, "fragment_x_static")
+            if field not in fields:
+                fields.append(field)
+    return fields
+
+
 def validate_dataloader_batch(batch):
     """Check atom, bond, fragment, and provenance mappings after collation."""
     required = [
@@ -217,7 +234,6 @@ def _expected_metadata(config):
     keys = [
         "preprocess_version",
         "dataset",
-        "fragmentation",
         "pooling",
         "atom_feature_dim",
         "bond_feature_dim",
@@ -228,5 +244,6 @@ def _expected_metadata(config):
         value = _config_get(config, key, None)
         if value is not None:
             metadata[key] = value
+    metadata["fragmentation"] = fragmentation_recipe_label(config)
     metadata["config_hash"] = preprocessing_config_hash(config)
     return metadata

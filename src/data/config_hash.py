@@ -2,7 +2,7 @@
 
 Preprocessing saves tensor-backed molecule records to .pt files. Those records
 depend on choices like the raw data source, split rules, SMILES/label columns,
-fragmentation method, pooling method, feature dimensions, strict parsing mode,
+view fragmentation recipe, pooling method, feature dimensions, strict parsing mode,
 and preprocessing version. If any of those choices change, an old .pt file may
 no longer match the active experiment and should be rejected by the dataloader.
 
@@ -43,7 +43,7 @@ PREPROCESS_CONFIG_KEYS = [
     "split_ratios",
     "seed",
     "strict",
-    "fragmentation",
+    "view_fragmentations",
     "pooling",
     "atom_feature_dim",
     "bond_feature_dim",

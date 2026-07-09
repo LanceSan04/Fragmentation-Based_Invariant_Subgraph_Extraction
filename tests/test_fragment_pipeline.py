@@ -175,7 +175,7 @@ class FragmentPipelineTests(unittest.TestCase):
         config = {
             "preprocess_version": "0.1.0",
             "dataset": "hash_test",
-            "fragmentation": "group_graph",
+            "view_fragmentations": {"group_graph": 1, "brics": 0, "recap": 0},
             "pooling": "mean_atom_and_internal_bond",
             "atom_feature_dim": 133,
             "bond_feature_dim": 14,
@@ -210,7 +210,7 @@ class FragmentPipelineTests(unittest.TestCase):
             config = {
                 "dataset": "hash_scope_test",
                 "preprocess_version": "0.1.0",
-                "fragmentation": "group_graph",
+                "view_fragmentations": {"group_graph": 1, "brics": 0, "recap": 0},
                 "pooling": "mean_atom_and_internal_bond",
                 "processed_dir": tmp_dir,
                 "smiles_key": "smiles",
@@ -236,12 +236,54 @@ class FragmentPipelineTests(unittest.TestCase):
             batch = next(iter(loaders["train"]))
             validate_dataloader_batch(batch)
 
+    def test_preprocessing_can_store_multiple_fragmentation_views(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = {
+                "dataset": "multi_view_test",
+                "preprocess_version": "0.1.0",
+                "view_fragmentations": {"group_graph": 1, "brics": 1, "recap": 1},
+                "num_views": 3,
+                "pooling": "mean_atom_and_internal_bond",
+                "processed_dir": tmp_dir,
+                "smiles_key": "smiles",
+                "label_key": "label",
+                "molecule_id_key": "molecule_id",
+                "strict": False,
+                "debug": False,
+                "batch_size": 1,
+                "splits": {
+                    "train": [
+                        {
+                            "molecule_id": "multi",
+                            "smiles": "CC(=O)NCCOC(=O)c1ccccc1",
+                            "label": 1,
+                        },
+                    ]
+                },
+            }
+
+            run_preprocessing(config)
+            payload = torch.load(osp.join(tmp_dir, "train.pt"), map_location="cpu", weights_only=False)
+            data = payload["molecule_data"][0]
+
+            for method in ("group_graph", "brics", "recap"):
+                self.assertTrue(hasattr(data, f"{method}_fragment_x_static"))
+                self.assertTrue(hasattr(data, f"{method}_fragment_edge_index"))
+                self.assertTrue(hasattr(data, f"{method}_atom_to_fragment"))
+
+            loaders = build_split_dataloaders(tmp_dir, config)
+            batch = next(iter(loaders["train"]))
+            self.assertTrue(hasattr(batch, "group_graph_fragment_x_static_batch"))
+            self.assertTrue(hasattr(batch, "brics_fragment_x_static_batch"))
+            self.assertTrue(hasattr(batch, "recap_fragment_x_static_batch"))
+            validate_dataloader_batch(batch)
+
     def test_preprocessing_writes_failure_report_for_skipped_records(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             config = {
                 "dataset": "failure_report_test",
                 "preprocess_version": "0.1.0",
-                "fragmentation": "group_graph",
+                "view_fragmentations": {"group_graph": 1, "brics": 0, "recap": 0},
                 "pooling": "mean_atom_and_internal_bond",
                 "processed_dir": tmp_dir,
                 "smiles_key": "smiles",
@@ -314,7 +356,7 @@ class FragmentPipelineTests(unittest.TestCase):
                 "raw_format": "drugood_json",
                 "raw_path": raw_path,
                 "processed_dir": processed_dir,
-                "fragmentation": "group_graph",
+                "view_fragmentations": {"group_graph": 1, "brics": 0, "recap": 0},
                 "pooling": "mean_atom_and_internal_bond",
                 "smiles_key": "smiles",
                 "label_key": "cls_label",

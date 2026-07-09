@@ -38,7 +38,10 @@ Each .pt file contains:
     {
         "metadata": {
             "dataset": "...",
-            "fragmentation": "group_graph", "brics", or "recap",
+            "fragmentation": "group_graph", "brics", "recap",
+                or a mixed recipe label,
+            "view_fragmentations": {"group_graph": 5, "brics": 0, "recap": 0},
+            "view_fragmentation_methods": ["group_graph"],
             "pooling": "mean_atom_and_internal_bond",
             "atom_feature_dim": 133,
             "bond_feature_dim": 14,
@@ -100,6 +103,13 @@ from src.data.molecule_example import build_molecule_example
 from src.data.pyg_batch import molecule_example_to_data
 from src.data.dataloader import build_split_dataloaders, validate_dataloader_batch
 from src.fragmentation import build_fragmenter
+from src.fragmentation.multi_view import (
+    fragmentation_recipe_label,
+    normalized_view_fragmentations,
+    primary_fragmentation_method,
+    unique_fragmentation_methods,
+    uses_mixed_fragmentations,
+)
 from src.models.fragment_pooler import FRAGMENT_FEATURE_DIM
 
 
@@ -238,7 +248,13 @@ def process_record(record, config, split_name=None, split_index=None):
     if molecule_id is None and bool(_config_get(config, "generate_molecule_id", True)):
         molecule_id = generated_molecule_id(config, split_name, split_index)
     metadata = record_metadata(record, config, split_name=split_name, split_index=split_index)
-    fragmenter = build_fragmenter(_config_get(config, "fragmentation", "group_graph"))
+    fragmenter = build_fragmenter(primary_fragmentation_method(config))
+    extra_fragmenters = None
+    if uses_mixed_fragmentations(config):
+        extra_fragmenters = {
+            method: build_fragmenter(method)
+            for method in unique_fragmentation_methods(config)
+        }
 
     example = build_molecule_example(
         smiles=smiles,
@@ -247,6 +263,7 @@ def process_record(record, config, split_name=None, split_index=None):
         molecule_id=molecule_id,
         metadata=metadata,
         fragmenter=fragmenter,
+        extra_fragmenters=extra_fragmenters,
         pooling=_config_get(config, "pooling", "mean_atom_and_internal_bond"),
     )
     if _debug_molecule_details(config):
@@ -309,7 +326,9 @@ def build_metadata(config):
     return {
         "preprocess_version": _config_get(config, "preprocess_version", "0.1.0"),
         "dataset": _config_get(config, "dataset", "unknown"),
-        "fragmentation": _config_get(config, "fragmentation", "group_graph"),
+        "fragmentation": fragmentation_recipe_label(config),
+        "view_fragmentations": dict(normalized_view_fragmentations(config)),
+        "view_fragmentation_methods": unique_fragmentation_methods(config),
         "pooling": _config_get(config, "pooling", "mean_atom_and_internal_bond"),
         "atom_feature_dim": ATOM_FDIM,
         "bond_feature_dim": BOND_FDIM,
@@ -339,6 +358,9 @@ def save_processed_split(examples, metadata, output_path, config=None):
 
 def run_preprocessing(config):
     """Run preprocessing for configured splits and save one .pt file per split."""
+    from src.utils.run_outputs import resolve_processed_dir
+
+    resolve_processed_dir(config)
     _debug_print(config, "Starting preprocessing")
     metadata = build_metadata(config)
     _debug_print(

@@ -43,20 +43,20 @@
 #      raw_path: data/raw/drugood/lbap_core_ec50_assay.json
 #      split_names: [train, iid_val, ood_val, iid_test, ood_test]
 #
-# Keep `processed_dir` aligned with both the dataset and fragmentation method
-# so outputs from different fragmenters do not overwrite each other. If you run
-# main.py with `--fragmentation recap` and do not pass `--processed-dir`, main.py
-# will switch the last processed_dir path component to `recap` automatically.
+# `view_fragmentations` below is the source of truth for which fragment graph(s)
+# are built and used. If `processed_dir` is empty, main.py derives it from
+# `{processed_root}/{dataset}/{fragmentation_recipe}`.
 
 # Consolidated run outputs.
 # When output_root is set, training/full/preprocess commands write run artifacts
 # under:
 #
-#   {output_root}/{dataset}/{fragmentation}/{run_name}/
+#   {output_root}/{dataset}/{fragmentation_recipe}/{run_name}/
 #
 # Use run_name: auto for a timestamped name such as:
 #
-#   drugood_lbap_core_ec50_assay__brics__train__20260708_120000
+#   drugood_lbap_core_ec50_assay__group_graph__train__20260708_120000
+#   drugood_lbap_core_ec50_assay__mixed_group_graph5_brics3_recap2__train__20260708_120000
 #
 # Each run directory contains:
 #
@@ -92,14 +92,23 @@ dataset: drugood_lbap_core_ec50_assay
 # Accepted: string. Recommended format: "major.minor.patch".
 preprocess_version: "0.1.0"
 
-# Fragmentation method used during preprocessing.
+# Fragmentation methods assigned to model views during preprocessing/training.
 # Available now:
 #   group_graph: default Group Graph-style molecular fragments.
 #   brics: RDKit BRICS fragments for ablation/comparison.
 #   recap: RECAP-rule bond cuts projected onto the original molecule, preserving
 #     every atom for reconstruction/provenance.
-# Accepted: group_graph | brics | recap.
-fragmentation: brics
+#
+# Counts must sum to num_views. Zero-count methods are allowed so you can switch
+# recipes by changing counts without commenting keys in/out.
+# Single positive-count method:
+#   keeps the original lean unprefixed fragment fields in .pt files.
+# Multiple positive-count methods:
+#   stores method-prefixed fragment graph fields for each positive method.
+view_fragmentations:
+  group_graph: 3
+  brics: 1
+  recap: 1
 
 # Fragment/supernode feature construction.
 # Available now:
@@ -130,7 +139,8 @@ fragment_feature_dim: 149
 #   processed_dir: data/processed/drugood_lbap_core_ec50_assay/group_graph
 #   processed_dir: data/processed/drugood_lbap_core_ec50_assay/brics
 #   processed_dir: data/processed/drugood_lbap_core_ec50_assay/recap
-processed_dir: data/processed/drugood_lbap_core_ec50_assay/brics
+processed_root: data/processed
+processed_dir:
 
 # When strict is false, skipped records are written to preprocess_failures.csv
 # inside processed_dir by default. Set failure_report_path only if you need a
@@ -250,6 +260,8 @@ follow_batch:
 # a smaller invariant subgraph.
 # num_views accepted: positive integer. Practical range: 1-5 for local runs;
 # larger costs more memory/time.
+# Mixed-method ensembles aggregate fragment-edge scores only within compatible
+# methods, then soft-vote predictions across method groups.
 # dropout accepted: float in [0, 1). Practical range: 0.0-0.3.
 num_classes: 2
 gnn_layers: 3

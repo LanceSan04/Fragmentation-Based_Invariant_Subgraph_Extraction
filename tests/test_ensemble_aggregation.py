@@ -35,6 +35,34 @@ def _build_batch(*smiles_labels):
     return Batch.from_data_list(data_list, follow_batch=["fragment_x_static"])
 
 
+def _build_multifragment_batch(*smiles_labels):
+    primary = build_fragmenter("group_graph")
+    extra = {
+        "group_graph": build_fragmenter("group_graph"),
+        "brics": build_fragmenter("brics"),
+    }
+    data_list = [
+        molecule_example_to_data(
+            build_molecule_example(
+                smi,
+                label=lbl,
+                molecule_id=f"m{i}",
+                fragmenter=primary,
+                extra_fragmenters=extra,
+            )
+        )
+        for i, (smi, lbl) in enumerate(smiles_labels)
+    ]
+    return Batch.from_data_list(
+        data_list,
+        follow_batch=[
+            "fragment_x_static",
+            "group_graph_fragment_x_static",
+            "brics_fragment_x_static",
+        ],
+    )
+
+
 def _make_views(batch, num_views=1):
     return [
         FragmentCIGA(
@@ -165,6 +193,46 @@ class SoftVoteOutputTests(unittest.TestCase):
             out = model(self.batch, view_indices=[1, 3])
         self.assertEqual(out.shape, (3, 2))
         self.assertTrue((out <= 0).all())
+
+    def test_mixed_fragmentation_views_soft_vote_without_edge_id_alignment(self):
+        batch = _build_multifragment_batch(
+            ("CC(=O)NCCOC(=O)c1ccccc1", 0),
+            ("CCOC(=O)NCC", 1),
+        )
+        views = [
+            FragmentCIGA(
+                atom_feature_dim=batch.x.size(1),
+                fragment_feature_dim=batch.group_graph_fragment_x_static.size(1),
+                num_classes=2,
+                num_gnn_layers=1,
+                gnn_hidden_dim=16,
+                edge_ratio=1.0,
+                dropout=0.0,
+                fragment_edge_dim=batch.group_graph_fragment_edge_attr.size(1),
+                atom_edge_dim=batch.edge_attr.size(1),
+                fragmentation_method="group_graph",
+            ),
+            FragmentCIGA(
+                atom_feature_dim=batch.x.size(1),
+                fragment_feature_dim=batch.brics_fragment_x_static.size(1),
+                num_classes=2,
+                num_gnn_layers=1,
+                gnn_hidden_dim=16,
+                edge_ratio=1.0,
+                dropout=0.0,
+                fragment_edge_dim=batch.brics_fragment_edge_attr.size(1),
+                atom_edge_dim=batch.edge_attr.size(1),
+                fragmentation_method="brics",
+            ),
+        ]
+        model = SuGAREnsemble(views)
+        model.eval()
+
+        with torch.no_grad():
+            out = model(batch)
+
+        self.assertEqual(out.shape, (2, 2))
+        self.assertTrue(torch.allclose(out.exp().sum(dim=1), torch.ones(2), atol=1e-5))
 
     def test_empty_view_indices_raises(self):
         model = _make_ensemble(self.batch, num_views=2)

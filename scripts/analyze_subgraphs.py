@@ -15,6 +15,11 @@ that the ensemble votes on, and reports:
   * support-filtered interpretation tables for top fragments, top fragment-pairs,
     and ranked functional-group rows.
 
+For mixed-view runs, fragment availability and selection counts are method-aware:
+group graph, BRICS, and RECAP fragments are counted in separate rows via the
+``fragmentation_method`` column. Single-method legacy runs use the original
+unprefixed graph fields, so their method is reported as ``default``.
+
 A checkpoint must be produced first via ``train_sugar.py --save_model ...``; both the
 rich ``save_training_checkpoint`` format and the bare ``{view_index: state_dict}`` map
 are accepted. The checkpoint's view count / architecture must match the data.
@@ -92,6 +97,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.data.dataloader import build_split_dataloaders
+from src.data.pyg_batch import fragment_view_field
 from src.models.sugar_ensemble import SuGAREnsemble
 from src.training.checkpoint import (
     checkpoint_feature_dims,
@@ -172,10 +178,18 @@ def collect_subgraph_records(ensemble, loader, device, num_samples=None):
         full_list = batch.to_data_list()
         result = ensemble.extract_subgraphs(batch)
 
-        # per_view[v] and aggregated are batched; unbatch to align with full_list order.
+        # per_view[v] and aggregate(s) are batched; unbatch to align with full_list order.
         per_view_lists = [pv.to_data_list() for pv in result["per_view"]]
         agg_list = result["aggregated"].to_data_list()
+        aggregated_by_method_lists = {
+            method: subgraph_batch.to_data_list()
+            for method, subgraph_batch in result.get("aggregated_by_method", {}).items()
+        }
         num_views = len(per_view_lists)
+        view_methods = [
+            getattr(view, "fragmentation_method", None) or "default"
+            for view in ensemble.views
+        ]
 
         for i in range(len(full_list)):
             if num_samples is not None and len(records) >= num_samples:
@@ -188,12 +202,11 @@ def collect_subgraph_records(ensemble, loader, device, num_samples=None):
                 _atom_indices(sub.selected_original_atom_indices) for sub in per_view_subs
             ]
             agg_atoms = _atom_indices(agg_sub.selected_original_atom_indices)
+            agg_by_method = {
+                method: subgraphs[i]
+                for method, subgraphs in aggregated_by_method_lists.items()
+            }
 
-            # Fragment graph (fragments as nodes, fragment edges as edges) plus the
-            # fragment edges/nodes each subgraph extracted. Taken from the molecule's
-            # own fragment structure so indices align with the reconstructions.
-            fragment_edges = _edge_pairs(getattr(full, "fragment_edge_index", None))
-            num_fragments = _num_fragments(full)
             per_view_edge_ids = [
                 _id_list(getattr(sub, "selected_fragment_edge_ids", None))
                 for sub in per_view_subs
@@ -203,8 +216,34 @@ def collect_subgraph_records(ensemble, loader, device, num_samples=None):
             ]
             agg_edge_ids = _id_list(getattr(agg_sub, "selected_fragment_edge_ids", None))
             agg_frag_ids = _id_list(getattr(agg_sub, "selected_fragment_ids", None))
-            atom_to_fragment = _int_list(getattr(full, "atom_to_fragment", None))
-            fragment_signatures = _fragment_signatures(full)
+            method_fragment_data = {}
+            methods = sorted(set(view_methods) | set(agg_by_method))
+            for method in methods:
+                method_key = None if method == "default" else method
+                method_agg = agg_by_method.get(method)
+                if method_agg is None and method == "default":
+                    method_agg = agg_sub
+                method_fragment_data[method] = {
+                    "num_fragments": _num_fragments(full, method_key),
+                    "fragment_edges": _edge_pairs(
+                        _fragment_value(full, "fragment_edge_index", method_key)
+                    ),
+                    "fragment_signatures": _fragment_signatures(full, method_key),
+                    "atom_to_fragment": _int_list(
+                        _fragment_value(full, "atom_to_fragment", method_key)
+                    ),
+                    "agg_atoms": _atom_indices(
+                        getattr(method_agg, "selected_original_atom_indices", None)
+                    ) if method_agg is not None else [],
+                    "agg_edge_ids": _id_list(
+                        getattr(method_agg, "selected_fragment_edge_ids", None)
+                    ) if method_agg is not None else [],
+                    "agg_frag_ids": _id_list(
+                        getattr(method_agg, "selected_fragment_ids", None)
+                    ) if method_agg is not None else [],
+                }
+            primary_method = view_methods[0] if view_methods else "default"
+            primary_data = method_fragment_data[primary_method]
             label = _label_value(getattr(full, "y", None))
 
             agreement = pairwise_view_agreement(per_view_atoms)
@@ -221,19 +260,21 @@ def collect_subgraph_records(ensemble, loader, device, num_samples=None):
                 {
                     "row": row,
                     "num_views": num_views,
+                    "view_methods": view_methods,
                     "smiles": row["smiles"],
                     "molecule_id": row["molecule_id"],
                     "per_view_atoms": per_view_atoms,
                     "agg_atoms": agg_atoms,
                     "agreement": agreement,
-                    "num_fragments": num_fragments,
-                    "fragment_signatures": fragment_signatures,
-                    "fragment_edges": fragment_edges,
+                    "num_fragments": primary_data["num_fragments"],
+                    "fragment_signatures": primary_data["fragment_signatures"],
+                    "fragment_edges": primary_data["fragment_edges"],
                     "per_view_edge_ids": per_view_edge_ids,
                     "per_view_frag_ids": per_view_frag_ids,
                     "agg_edge_ids": agg_edge_ids,
                     "agg_frag_ids": agg_frag_ids,
-                    "atom_to_fragment": atom_to_fragment,
+                    "atom_to_fragment": primary_data["atom_to_fragment"],
+                    "method_fragment_data": method_fragment_data,
                 }
             )
 
@@ -271,6 +312,12 @@ def _edge_pairs(edge_index):
     return [(int(ei[0, k]), int(ei[1, k])) for k in range(ei.size(1))]
 
 
+def _fragment_value(full_data, field, method=None):
+    """Read a default or method-prefixed fragment field."""
+    name = fragment_view_field(method, field)
+    return getattr(full_data, name, None)
+
+
 def _label_value(value):
     """Normalize a graph label into a compact string for grouped metrics."""
     if value is None:
@@ -284,7 +331,7 @@ def _label_value(value):
     return str(value)
 
 
-def _fragment_signatures(full_data):
+def _fragment_signatures(full_data, method=None):
     """Return stable fragment identity tuples aligned to fragment ids.
 
     The first implementation uses the metadata already preserved by preprocessing:
@@ -292,9 +339,9 @@ def _fragment_signatures(full_data):
     Group Graph split fragments from ordinary fragments while still aggregating
     the same chemistry across molecules.
     """
-    num_fragments = _num_fragments(full_data)
-    fragment_types = list(getattr(full_data, "fragment_types", None) or [])
-    fragment_smiles = list(getattr(full_data, "fragment_smiles", None) or [])
+    num_fragments = _num_fragments(full_data, method)
+    fragment_types = list(_fragment_value(full_data, "fragment_types", method) or [])
+    fragment_smiles = list(_fragment_value(full_data, "fragment_smiles", method) or [])
     signatures = []
     for fragment_id in range(num_fragments):
         fragment_type = (
@@ -311,12 +358,12 @@ def _fragment_signatures(full_data):
     return signatures
 
 
-def _num_fragments(full_data):
+def _num_fragments(full_data, method=None):
     """Number of fragments in a molecule (rows of fragment_x_static)."""
-    frag_x = getattr(full_data, "fragment_x_static", None)
+    frag_x = _fragment_value(full_data, "fragment_x_static", method)
     if frag_x is not None:
         return int(frag_x.size(0))
-    atom_to_fragment = getattr(full_data, "atom_to_fragment", None)
+    atom_to_fragment = _fragment_value(full_data, "atom_to_fragment", method)
     if atom_to_fragment is not None and atom_to_fragment.numel() > 0:
         return int(atom_to_fragment.max()) + 1
     return 0
@@ -338,27 +385,52 @@ def _offdiag_mean(matrix):
     return total / (n * (n - 1))
 
 
-def _source_names(num_views):
-    return [f"view_{view_idx}" for view_idx in range(num_views)] + [
+def _source_names(view_indices):
+    return [f"view_{view_idx}" for view_idx in view_indices] + [
         "any_view",
         "aggregated",
     ]
 
 
-def _selected_ids_by_source(record, selected_key):
+def _selected_ids_by_source(record, selected_key, method):
     """Return selected fragment/edge ids grouped by view, any-view, and aggregate."""
     per_view = record[selected_key]
+    view_methods = record.get("view_methods") or ["default"] * len(per_view)
     by_source = {
         f"view_{view_idx}": set(ids)
         for view_idx, ids in enumerate(per_view)
+        if view_idx < len(view_methods) and view_methods[view_idx] == method
     }
     any_view = set()
-    for ids in per_view:
+    for view_idx, ids in enumerate(per_view):
+        if view_idx >= len(view_methods) or view_methods[view_idx] != method:
+            continue
         any_view.update(ids)
     by_source["any_view"] = any_view
+    method_data = _record_method_data(record, method)
     aggregate_key = "agg_frag_ids" if selected_key == "per_view_frag_ids" else "agg_edge_ids"
-    by_source["aggregated"] = set(record[aggregate_key])
+    by_source["aggregated"] = set(method_data.get(aggregate_key, []))
     return by_source
+
+
+def _record_methods(record):
+    if "method_fragment_data" in record:
+        return list(record["method_fragment_data"])
+    return ["default"]
+
+
+def _record_method_data(record, method):
+    if "method_fragment_data" in record:
+        return record["method_fragment_data"][method]
+    return {
+        "num_fragments": record.get("num_fragments", 0),
+        "fragment_signatures": record.get("fragment_signatures", []),
+        "fragment_edges": record.get("fragment_edges", []),
+        "atom_to_fragment": record.get("atom_to_fragment", []),
+        "agg_atoms": record.get("agg_atoms", []),
+        "agg_edge_ids": record.get("agg_edge_ids", []),
+        "agg_frag_ids": record.get("agg_frag_ids", []),
+    }
 
 
 def _canonical_fragment_pair(sig_a, sig_b):
@@ -376,53 +448,70 @@ def build_fragment_selection_metric_rows(records):
     if not records:
         return [], []
 
-    num_views = records[0]["num_views"]
-    sources = _source_names(num_views)
     fragment_available = Counter()
     fragment_selected = Counter()
+    fragment_sources = {}
     edge_available = Counter()
     edge_selected = Counter()
+    edge_sources = {}
 
     for record in records:
         label = str(record["row"].get("label", "unknown"))
-        fragment_signatures = record["fragment_signatures"]
+        view_methods = record.get("view_methods") or ["default"] * record["num_views"]
 
-        for fragment_id, signature in enumerate(fragment_signatures):
-            fragment_available[(label, signature)] += 1
+        for method in _record_methods(record):
+            method_data = _record_method_data(record, method)
+            fragment_signatures = method_data["fragment_signatures"]
+            view_indices = [
+                idx for idx, view_method in enumerate(view_methods)
+                if view_method == method
+            ]
+            sources = _source_names(view_indices)
 
-        fragment_ids_by_source = _selected_ids_by_source(record, "per_view_frag_ids")
-        for source, selected_ids in fragment_ids_by_source.items():
-            for fragment_id in selected_ids:
-                if 0 <= fragment_id < len(fragment_signatures):
-                    fragment_selected[(source, label, fragment_signatures[fragment_id])] += 1
+            for fragment_id, signature in enumerate(fragment_signatures):
+                fragment_available[(method, label, signature)] += 1
+                fragment_sources.setdefault((method, label, signature), set()).update(sources)
 
-        edge_signatures = []
-        for edge_id, (src, dst) in enumerate(record["fragment_edges"]):
-            if src >= len(fragment_signatures) or dst >= len(fragment_signatures):
-                continue
-            edge_signature = _canonical_fragment_pair(
-                fragment_signatures[src],
-                fragment_signatures[dst],
+            fragment_ids_by_source = _selected_ids_by_source(
+                record,
+                "per_view_frag_ids",
+                method,
             )
-            edge_signatures.append((edge_id, edge_signature))
-            edge_available[(label, edge_signature)] += 1
+            for source, selected_ids in fragment_ids_by_source.items():
+                for fragment_id in selected_ids:
+                    if 0 <= fragment_id < len(fragment_signatures):
+                        fragment_selected[(method, source, label, fragment_signatures[fragment_id])] += 1
 
-        edge_ids_by_source = _selected_ids_by_source(record, "per_view_edge_ids")
-        edge_signature_by_id = dict(edge_signatures)
-        for source, selected_ids in edge_ids_by_source.items():
-            for edge_id in selected_ids:
-                edge_signature = edge_signature_by_id.get(edge_id)
-                if edge_signature is not None:
-                    edge_selected[(source, label, edge_signature)] += 1
+            edge_signatures = []
+            for edge_id, (src, dst) in enumerate(method_data["fragment_edges"]):
+                if src >= len(fragment_signatures) or dst >= len(fragment_signatures):
+                    continue
+                edge_signature = _canonical_fragment_pair(
+                    fragment_signatures[src],
+                    fragment_signatures[dst],
+                )
+                edge_signatures.append((edge_id, edge_signature))
+                edge_available[(method, label, edge_signature)] += 1
+                edge_sources.setdefault((method, label, edge_signature), set()).update(sources)
+
+            edge_ids_by_source = _selected_ids_by_source(record, "per_view_edge_ids", method)
+            edge_signature_by_id = dict(edge_signatures)
+            for source, selected_ids in edge_ids_by_source.items():
+                for edge_id in selected_ids:
+                    edge_signature = edge_signature_by_id.get(edge_id)
+                    if edge_signature is not None:
+                        edge_selected[(method, source, label, edge_signature)] += 1
 
     fragment_rows = []
-    for label, signature in sorted(fragment_available):
-        available = fragment_available[(label, signature)]
+    for method, label, signature in sorted(fragment_available):
+        available = fragment_available[(method, label, signature)]
         fragment_type, fragment_smiles = signature
+        sources = sorted(fragment_sources.get((method, label, signature), {"any_view", "aggregated"}))
         for source in sources:
-            selected = fragment_selected[(source, label, signature)]
+            selected = fragment_selected[(method, source, label, signature)]
             fragment_rows.append(
                 {
+                    "fragmentation_method": method,
                     "label": label,
                     "selection_source": source,
                     "fragment_type": fragment_type,
@@ -434,13 +523,15 @@ def build_fragment_selection_metric_rows(records):
             )
 
     edge_rows = []
-    for label, edge_signature in sorted(edge_available):
-        available = edge_available[(label, edge_signature)]
+    for method, label, edge_signature in sorted(edge_available):
+        available = edge_available[(method, label, edge_signature)]
         (type_a, smiles_a), (type_b, smiles_b) = edge_signature
+        sources = sorted(edge_sources.get((method, label, edge_signature), {"any_view", "aggregated"}))
         for source in sources:
-            selected = edge_selected[(source, label, edge_signature)]
+            selected = edge_selected[(method, source, label, edge_signature)]
             edge_rows.append(
                 {
+                    "fragmentation_method": method,
                     "label": label,
                     "selection_source": source,
                     "fragment_a_type": type_a,
@@ -479,6 +570,7 @@ def write_fragment_selection_metrics(records, output_dir):
         output_dir / "fragment_selection_metrics.csv",
         fragment_rows,
         [
+            "fragmentation_method",
             "label",
             "selection_source",
             "fragment_type",
@@ -492,6 +584,7 @@ def write_fragment_selection_metrics(records, output_dir):
         output_dir / "fragment_pair_selection_metrics.csv",
         edge_rows,
         [
+            "fragmentation_method",
             "label",
             "selection_source",
             "fragment_a_type",
@@ -541,7 +634,7 @@ def _limited_sorted(rows, primary_key, top_k):
 def _top_within_groups(rows, group_fields, primary_key, top_k):
     grouped = {}
     for row in rows:
-        key = tuple(row[field] for field in group_fields)
+        key = tuple(row.get(field, "default") for field in group_fields)
         grouped.setdefault(key, []).append(row)
 
     ranked = []
@@ -611,13 +704,19 @@ def build_fragment_interpretation_tables(fragment_rows, edge_rows, min_available
         ),
         "top_functional_group_fragments.csv": _top_within_groups(
             supported_fragments,
-            ["label", "selection_source", "fragment_type"],
+            ["fragmentation_method", "label", "selection_source", "fragment_type"],
             "selection_rate",
             top_k,
         ),
         "top_functional_group_pairs.csv": _top_within_groups(
             supported_edges,
-            ["label", "selection_source", "fragment_a_type", "fragment_b_type"],
+            [
+                "fragmentation_method",
+                "label",
+                "selection_source",
+                "fragment_a_type",
+                "fragment_b_type",
+            ],
             "selection_rate",
             top_k,
         ),
@@ -882,26 +981,38 @@ def build_molecule_figure(record):
     num_views = record["num_views"]
     panels = [
         (
-            f"View {v}",
+            f"View {v} ({record.get('view_methods', ['default'] * num_views)[v]})",
+            record.get("view_methods", ["default"] * num_views)[v],
             record["per_view_atoms"][v],
             record["per_view_edge_ids"][v],
             record["per_view_frag_ids"][v],
         )
         for v in range(num_views)
     ]
-    panels.append(
-        ("Aggregated", record["agg_atoms"], record["agg_edge_ids"], record["agg_frag_ids"])
-    )
-
-    num_fragments = record["num_fragments"]
-    edges = record["fragment_edges"]
-    frag_colors = _fragment_colors(num_fragments)
-    atom_to_fragment = record["atom_to_fragment"]
+    for method, method_data in record.get("method_fragment_data", {}).items():
+        panels.append(
+            (
+                f"Aggregated ({method})",
+                method,
+                method_data["agg_atoms"],
+                method_data["agg_edge_ids"],
+                method_data["agg_frag_ids"],
+            )
+        )
+    if "method_fragment_data" not in record:
+        panels.append(
+            ("Aggregated", "default", record["agg_atoms"], record["agg_edge_ids"], record["agg_frag_ids"])
+        )
 
     n_rows = len(panels)
     fig, axes = plt.subplots(n_rows, 2, figsize=(9, 3.4 * n_rows), squeeze=False)
-    for i, (label, atoms, edge_ids, frag_ids) in enumerate(panels):
+    for i, (label, method, atoms, edge_ids, frag_ids) in enumerate(panels):
         ax_mol, ax_graph = axes[i][0], axes[i][1]
+        method_data = _record_method_data(record, method)
+        num_fragments = method_data["num_fragments"]
+        edges = method_data["fragment_edges"]
+        frag_colors = _fragment_colors(num_fragments)
+        atom_to_fragment = method_data["atom_to_fragment"]
 
         connected_fragments = _selected_fragment_pairs(edges, edge_ids)
         bond_ids = internal_bond_ids(mol, atoms, atom_to_fragment, connected_fragments)

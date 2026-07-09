@@ -28,6 +28,12 @@ except ImportError:
     _SKLEARN_AVAILABLE = False
 
 from src.data.dataloader import build_split_dataloaders
+from src.fragmentation.multi_view import (
+    expand_view_fragmentations,
+    fragmentation_recipe_label,
+    unique_fragmentation_methods,
+    uses_mixed_fragmentations,
+)
 from src.models.fragment_ciga import FragmentCIGA
 from src.models.sugar_ensemble import SuGAREnsemble
 from src.training.sugar_trainer import SuGARTrainer
@@ -42,7 +48,7 @@ from src.training.checkpoint import (
     save_training_checkpoint,
     view_state_dicts_from_checkpoint,
 )
-from src.utils.run_outputs import prepare_run_outputs, write_run_manifest
+from src.utils.run_outputs import prepare_run_outputs, resolve_processed_dir, write_run_manifest
 
 
 @dataclass
@@ -98,6 +104,8 @@ def build_shared_initialized_views(
 ):
     """Build FragmentCIGA views from one shared initial state."""
     num_views = config.num_views
+    view_fragmentation_methods = expand_view_fragmentations(config)
+    uses_default_fragmentation = not uses_mixed_fragmentations(config)
     shared_view = FragmentCIGA(
         atom_feature_dim=atom_feat_dim,
         fragment_feature_dim=fragment_feat_dim,
@@ -110,6 +118,9 @@ def build_shared_initialized_views(
         atom_edge_dim=atom_edge_dim,
         fragment_sample_ratio=config.fragment_sample_ratio,
         sampler_seed=config.sampler_seed,
+        fragmentation_method=(
+            None if uses_default_fragmentation else view_fragmentation_methods[0]
+        ),
     )
     shared_initial_state = deepcopy(shared_view.state_dict())
 
@@ -130,6 +141,9 @@ def build_shared_initialized_views(
                 None
                 if config.sampler_seed is None
                 else int(config.sampler_seed) + i
+            ),
+            fragmentation_method=(
+                None if uses_default_fragmentation else view_fragmentation_methods[i]
             ),
         )
         view.load_state_dict(shared_initial_state)
@@ -211,6 +225,7 @@ def apply_checkpoint_defaults(config, checkpoint_payload):
     """Fill missing config fields from a full checkpoint's saved config."""
     model_shape_keys = {
         "num_views",
+        "view_fragmentations",
         "num_classes",
         "gnn_layers",
         "hidden_dim",
@@ -325,7 +340,7 @@ def build_final_metrics_report(
     """Build the final evaluation report saved after training."""
     metadata_keys = [
         "dataset",
-        "fragmentation",
+        "view_fragmentations",
         "processed_dir",
         "train_split",
         "validation_split",
@@ -349,6 +364,8 @@ def build_final_metrics_report(
         for key in metadata_keys
         if config.get(key, None) is not None
     }
+    metadata["fragmentation"] = fragmentation_recipe_label(config)
+    metadata["view_fragmentation_methods"] = unique_fragmentation_methods(config)
     metadata["selected_view_indices"] = selected_view_indices
     metadata["epoch"] = epoch
 
@@ -394,6 +411,7 @@ def run_training(config, resume_from=None):
         print(f"Loaded checkpoint for resume: {resume_from}")
 
     prepare_run_outputs(config, command_name="train")
+    resolve_processed_dir(config)
 
     device = resolve_device(config)
     print(f"Using device: {device}")

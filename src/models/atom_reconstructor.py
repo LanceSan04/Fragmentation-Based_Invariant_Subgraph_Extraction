@@ -3,6 +3,8 @@
 import torch
 from torch_geometric.data import Batch, Data
 
+from src.models.fragment_graph import get_fragment_view_value
+
 
 class ReconstructedAtomData(Data):
     """Atom-level graph reconstructed from selected fragment evidence."""
@@ -54,14 +56,33 @@ def reconstruct_atom_graph(
     molecule_data,
     selected_fragment_edge_mask,
     selected_fragment_edge_weight=None,
+    fragmentation_method=None,
 ):
     """Restore selected fragments, internal bonds, and selected attachments."""
+    fragment_edge_index = get_fragment_view_value(
+        molecule_data, "fragment_edge_index", fragmentation_method
+    )
+    fragment_x_static = get_fragment_view_value(
+        molecule_data, "fragment_x_static", fragmentation_method
+    )
+    atom_to_fragment = get_fragment_view_value(
+        molecule_data, "atom_to_fragment", fragmentation_method
+    )
+    fragment_edge_to_bond_index = get_fragment_view_value(
+        molecule_data, "fragment_edge_to_bond_index", fragmentation_method
+    )
+    fragment_edge_to_bond = get_fragment_view_value(
+        molecule_data, "fragment_edge_to_bond", fragmentation_method
+    )
+    fragment_edge_to_attachment_atoms = get_fragment_view_value(
+        molecule_data, "fragment_edge_to_attachment_atoms", fragmentation_method
+    )
     selected_fragment_edge_mask = torch.as_tensor(
         selected_fragment_edge_mask,
         dtype=torch.bool,
-        device=molecule_data.fragment_edge_index.device,
+        device=fragment_edge_index.device,
     )
-    num_fragment_edges = molecule_data.fragment_edge_index.size(1)
+    num_fragment_edges = fragment_edge_index.size(1)
     if selected_fragment_edge_mask.numel() != num_fragment_edges:
         raise ValueError("selected_fragment_edge_mask must contain one value per fragment edge")
     if selected_fragment_edge_mask.dim() != 1:
@@ -70,7 +91,7 @@ def reconstruct_atom_graph(
         selected_fragment_edge_weight = torch.as_tensor(
             selected_fragment_edge_weight,
             dtype=molecule_data.x.dtype,
-            device=molecule_data.fragment_edge_index.device,
+            device=fragment_edge_index.device,
         )
         if selected_fragment_edge_weight.numel() != num_fragment_edges:
             raise ValueError(
@@ -81,14 +102,14 @@ def reconstruct_atom_graph(
 
     if num_fragment_edges == 0:
         selected_fragments = torch.arange(
-            molecule_data.fragment_x_static.size(0),
+            fragment_x_static.size(0),
             dtype=torch.long,
-            device=molecule_data.fragment_x_static.device,
+            device=fragment_x_static.device,
         )
         selected_fragment_edge_ids = torch.empty(
             (0,),
             dtype=torch.long,
-            device=molecule_data.fragment_edge_index.device,
+            device=fragment_edge_index.device,
         )
         selected_bond_indices = torch.empty((0,), dtype=torch.long, device=molecule_data.x.device)
         selected_attachment_bond_ids = torch.empty((0,), dtype=torch.long, device=molecule_data.x.device)
@@ -100,14 +121,14 @@ def reconstruct_atom_graph(
             as_tuple=False,
         ).view(-1)
         selected_fragments = selected_fragment_nodes(
-            molecule_data.fragment_edge_index,
+            fragment_edge_index,
             selected_fragment_edge_mask,
         )
         if selected_fragments.numel() == 0:
             raise ValueError("At least one fragment edge must be selected when fragment edges exist")
-        selected_bond_indices = molecule_data.fragment_edge_to_bond_index[selected_fragment_edge_mask]
-        selected_attachment_bond_ids = molecule_data.fragment_edge_to_bond[selected_fragment_edge_mask]
-        selected_attachment_atoms = molecule_data.fragment_edge_to_attachment_atoms[
+        selected_bond_indices = fragment_edge_to_bond_index[selected_fragment_edge_mask]
+        selected_attachment_bond_ids = fragment_edge_to_bond[selected_fragment_edge_mask]
+        selected_attachment_atoms = fragment_edge_to_attachment_atoms[
             :,
             selected_fragment_edge_mask,
         ]
@@ -123,7 +144,7 @@ def reconstruct_atom_graph(
                 molecule_data.x.device
             )
 
-    selected_atom_mask = torch.isin(molecule_data.atom_to_fragment, selected_fragments)
+    selected_atom_mask = torch.isin(atom_to_fragment, selected_fragments)
     selected_atoms = torch.nonzero(selected_atom_mask, as_tuple=False).view(-1)
 
     if selected_atoms.numel() == 0:
@@ -146,7 +167,7 @@ def reconstruct_atom_graph(
     else:
         endpoint_mask = selected_atom_mask[bond_src] & selected_atom_mask[bond_dst]
         internal_mask = endpoint_mask & (
-            molecule_data.atom_to_fragment[bond_src] == molecule_data.atom_to_fragment[bond_dst]
+            atom_to_fragment[bond_src] == atom_to_fragment[bond_dst]
         )
         internal_bond_indices = torch.nonzero(internal_mask, as_tuple=False).view(-1)
         selected_unique_bonds = torch.unique(
@@ -316,13 +337,19 @@ def build_reconstructed_bond_weight(
     return weights
 
 
-def reconstruct_batch(batch, selected_fragment_edge_mask, selected_fragment_edge_weight=None):
+def reconstruct_batch(
+    batch,
+    selected_fragment_edge_mask,
+    selected_fragment_edge_weight=None,
+    fragmentation_method=None,
+):
     """Reconstruct each molecule independently and return a PyG batch."""
     if not hasattr(batch, "to_data_list"):
         return reconstruct_atom_graph(
             batch,
             selected_fragment_edge_mask,
             selected_fragment_edge_weight=selected_fragment_edge_weight,
+            fragmentation_method=fragmentation_method,
         )
 
     selected_fragment_edge_mask = torch.as_tensor(selected_fragment_edge_mask, dtype=torch.bool)
@@ -339,7 +366,9 @@ def reconstruct_batch(batch, selected_fragment_edge_mask, selected_fragment_edge
     reconstructed = []
     cursor = 0
     for molecule_data in batch.to_data_list():
-        num_edges = molecule_data.fragment_edge_index.size(1)
+        num_edges = get_fragment_view_value(
+            molecule_data, "fragment_edge_index", fragmentation_method
+        ).size(1)
         mask = selected_fragment_edge_mask[cursor: cursor + num_edges].contiguous()
         if selected_fragment_edge_weight is None:
             edge_weight = None
@@ -350,6 +379,7 @@ def reconstruct_batch(batch, selected_fragment_edge_mask, selected_fragment_edge
                 molecule_data,
                 mask,
                 selected_fragment_edge_weight=edge_weight,
+                fragmentation_method=fragmentation_method,
             )
         )
         cursor += num_edges
@@ -360,7 +390,12 @@ def reconstruct_batch(batch, selected_fragment_edge_mask, selected_fragment_edge
     return Batch.from_data_list(reconstructed)
 
 
-def reconstruct_batch_fast(batch, selected_fragment_edge_mask, selected_fragment_edge_weight=None):
+def reconstruct_batch_fast(
+    batch,
+    selected_fragment_edge_mask,
+    selected_fragment_edge_weight=None,
+    fragmentation_method=None,
+):
     """Vectorized classifier-only atom-subgraph reconstruction for a batch.
 
     Produces exactly the tensors :class:`AtomClassifier` consumes (``x``,
@@ -379,12 +414,12 @@ def reconstruct_batch_fast(batch, selected_fragment_edge_mask, selected_fragment
     device = batch.x.device
     mask = torch.as_tensor(selected_fragment_edge_mask, dtype=torch.bool, device=device)
 
-    frag_edge_index = batch.fragment_edge_index
+    frag_edge_index = get_fragment_view_value(batch, "fragment_edge_index", fragmentation_method)
     if frag_edge_index.size(1) != mask.numel():
         raise ValueError("selected_fragment_edge_mask must contain one value per fragment edge")
 
-    atom_to_fragment = batch.atom_to_fragment
-    frag_node_batch = batch.fragment_x_static_batch
+    atom_to_fragment = get_fragment_view_value(batch, "atom_to_fragment", fragmentation_method)
+    frag_node_batch = get_fragment_view_value(batch, "fragment_x_static_batch", fragmentation_method)
 
     # Molecules with no fragment edges keep all their fragments — matches the
     # num_fragment_edges == 0 branch of reconstruct_atom_graph.
@@ -408,7 +443,9 @@ def reconstruct_batch_fast(batch, selected_fragment_edge_mask, selected_fragment
     atom_map[selected_atoms] = torch.arange(selected_atoms.numel(), device=device)
 
     bond_index = batch.bond_index
-    boundary_bonds = batch.fragment_edge_to_bond_index[mask]
+    boundary_bonds = get_fragment_view_value(
+        batch, "fragment_edge_to_bond_index", fragmentation_method
+    )[mask]
     if bond_index.numel():
         bsrc, bdst = bond_index[0], bond_index[1]
         endpoint_mask = selected_atom_mask[bsrc] & selected_atom_mask[bdst]

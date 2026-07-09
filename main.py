@@ -8,7 +8,7 @@ those defaults for a single run.
 
 When ``output_root`` is configured, run artifacts are consolidated under:
 
-    outputs/{dataset}/{fragmentation}/{run_name}/
+    outputs/{dataset}/{fragmentation_recipe}/{run_name}/
 
 That run folder contains checkpoints, training logs, final metrics,
 diagnostic outputs, the effective config, and run_manifest.json. Processed
@@ -53,7 +53,7 @@ import yaml
 
 from src.data.dataloader import build_split_dataloaders, validate_dataloader_batch
 from train_sugar import Config, evaluate_checkpoint, run_training
-from src.utils.run_outputs import prepare_run_outputs, write_run_manifest
+from src.utils.run_outputs import prepare_run_outputs, resolve_processed_dir, write_run_manifest
 
 
 ROOT = Path(__file__).resolve().parent
@@ -61,7 +61,7 @@ ROOT = Path(__file__).resolve().parent
 
 COMMON_OVERRIDES = (
     "dataset",
-    "fragmentation",
+    "processed_root",
     "processed_dir",
     "device",
     "epochs",
@@ -102,7 +102,6 @@ def apply_common_overrides(config, args):
     """Apply explicit CLI overrides to a config dictionary."""
     merged = dict(config or {})
     explicit_processed_dir = getattr(args, "processed_dir", None) is not None
-    old_processed_dir = merged.get("processed_dir")
 
     for key in COMMON_OVERRIDES:
         value = getattr(args, key, None)
@@ -117,15 +116,11 @@ def apply_common_overrides(config, args):
     if explicit_output_paths:
         merged["_explicit_output_paths"] = explicit_output_paths
 
-    if (
-        getattr(args, "fragmentation", None)
-        and not explicit_processed_dir
-        and old_processed_dir
-    ):
-        merged["processed_dir"] = str(Path(old_processed_dir).parent / args.fragmentation)
+    if not explicit_processed_dir and not merged.get("processed_dir"):
+        resolve_processed_dir(merged)
         merged.pop("failure_report_path", None)
         print(
-            "No --processed-dir supplied; using fragmenter-specific processed_dir: "
+            "No processed_dir supplied; using view-fragmentation processed_dir: "
             f"{merged['processed_dir']}"
         )
 
@@ -349,7 +344,7 @@ def run_inspect_command(args):
 def add_common_arguments(parser):
     parser.add_argument("--config", default="configs/experiment.yaml")
     parser.add_argument("--dataset")
-    parser.add_argument("--fragmentation")
+    parser.add_argument("--processed-root", dest="processed_root")
     parser.add_argument("--processed-dir", dest="processed_dir")
     parser.add_argument("--device")
     parser.add_argument("--epochs", type=int)

@@ -159,20 +159,28 @@ class SuGARTrainer:
             components["contrastive_loss_weighted"] = self.lambda_contrast * contrastive
 
         if self.lambda_diversity > 0 and len(self.views) > 1:
-            # All views score the same fragment graph, so the edge->molecule map
-            # is shared; take it from any view. edge_batch makes the cosine
-            # per-molecule; eligible_masks restricts each view pair to edges both
-            # actually scored, dropping the sampler's zero-fill artifact (a no-op
-            # at eval, where the sampler is off and all edges are eligible).
-            eligible_masks = [pv.get("fragment_edge_eligible") for pv in per_view]
-            if any(m is None for m in eligible_masks):
-                eligible_masks = None
-            diversity = pairwise_diversity_loss(
-                [pv["fragment_scores"] for pv in per_view],
-                edge_batch=per_view[0].get("fragment_edge_batch"),
-                eligible_masks=eligible_masks,
-                num_graphs=labels.size(0),
-            )
+            diversity_terms = []
+            grouped = {}
+            for pv in per_view:
+                grouped.setdefault(pv.get("fragmentation_method"), []).append(pv)
+            for method_views in grouped.values():
+                if len(method_views) < 2:
+                    continue
+                eligible_masks = [pv.get("fragment_edge_eligible") for pv in method_views]
+                if any(mask is None for mask in eligible_masks):
+                    eligible_masks = None
+                diversity_terms.append(
+                    pairwise_diversity_loss(
+                        [pv["fragment_scores"] for pv in method_views],
+                        edge_batch=method_views[0].get("fragment_edge_batch"),
+                        eligible_masks=eligible_masks,
+                        num_graphs=labels.size(0),
+                    )
+                )
+            if diversity_terms:
+                diversity = torch.stack(diversity_terms).mean()
+            else:
+                diversity = labels.new_zeros(())
             components["diversity_loss"] = diversity
             components["diversity_loss_weighted"] = self.lambda_diversity * diversity
 
@@ -373,12 +381,18 @@ class SuGARTrainer:
         return labels.long()
 
     def _forward_views(self, batch, use_aux):
-        # The batched fragment graph is a pure function of the batch and identical
-        # across every view, so build it once and share it instead of having each
-        # view rebuild it inside its forward pass.
-        fragment_batch = build_fragment_graph_batch(batch).to(self.device)
+        # The batched fragment graph is a pure function of the batch and method.
+        # Build it once per fragmentation method and share it across views.
+        fragment_batches = {}
         per_view = []
         for view in self.views:
+            method = getattr(view, "fragmentation_method", None)
+            if method not in fragment_batches:
+                fragment_batches[method] = build_fragment_graph_batch(
+                    batch,
+                    method=method,
+                ).to(self.device)
+            fragment_batch = fragment_batches[method]
             if use_aux:
                 pred, interm = view(batch, return_intermediates=True, fragment_batch=fragment_batch)
                 per_view.append({"predictions": pred, **interm})

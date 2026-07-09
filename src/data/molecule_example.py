@@ -33,6 +33,7 @@ class MoleculeExample:
     fragment_edge_to_attachment_atoms: Any = None
     fragment_types: Optional[Any] = None
     fragment_smiles: Optional[Any] = None
+    fragment_views: Optional[Any] = None
     y: Any = None
     environment_or_group: Optional[Any] = None
     smiles: Optional[str] = None
@@ -124,6 +125,7 @@ def build_molecule_example(
     molecule_id=None,
     metadata=None,
     fragmenter=None,
+    extra_fragmenters=None,
     pooling="mean_atom_and_internal_bond",
 ):
     """Construct a MoleculeExample from raw molecular inputs."""
@@ -133,17 +135,11 @@ def build_molecule_example(
 
     atom_graph = mol_to_atom_graph(mol)
     fragmenter = fragmenter or build_fragmenter("group_graph")
-    fragmentation = fragmenter.fragment(mol)
-    fragment_edge_attr = build_fragment_edge_features(mol, fragmentation)
-
     pooler = FragmentPooler(pooling=pooling)
-    fragment_x_static = pooler(
-        atom_graph.atom_x,
-        atom_graph.bond_index,
-        atom_graph.bond_attr,
-        fragmentation.atom_to_fragment,
-        num_fragments=fragmentation.num_fragments,
-    )
+    primary_view = build_fragment_view_payload(mol, atom_graph, fragmenter, pooler)
+    extra_views = {}
+    for method, extra_fragmenter in (extra_fragmenters or {}).items():
+        extra_views[method] = build_fragment_view_payload(mol, atom_graph, extra_fragmenter, pooler)
 
     if label is None:
         y = None
@@ -161,23 +157,50 @@ def build_molecule_example(
         atom_ids=atom_graph.atom_ids,
         bond_ids=atom_graph.bond_ids,
         directed_edge_to_bond=atom_graph.directed_edge_to_bond,
-        fragment_x_static=fragment_x_static,
-        fragment_edge_index=fragmentation.fragment_edge_index,
-        fragment_edge_attr=fragment_edge_attr,
-        atom_to_fragment=fragmentation.atom_to_fragment,
-        fragment_to_atoms=fragmentation.fragment_to_atoms,
-        fragment_to_atom_index=build_fragment_to_atom_index(fragmentation.fragment_to_atoms),
-        fragment_edge_to_bond=fragmentation.fragment_edge_to_bond,
-        fragment_edge_to_bond_index=fragmentation.fragment_edge_to_bond_index,
-        fragment_edge_to_attachment_atoms=fragmentation.fragment_edge_to_attachment_atoms,
-        fragment_types=fragmentation.fragment_types,
-        fragment_smiles=fragmentation.fragment_smiles,
+        fragment_x_static=primary_view["fragment_x_static"],
+        fragment_edge_index=primary_view["fragment_edge_index"],
+        fragment_edge_attr=primary_view["fragment_edge_attr"],
+        atom_to_fragment=primary_view["atom_to_fragment"],
+        fragment_to_atoms=primary_view["fragment_to_atoms"],
+        fragment_to_atom_index=primary_view["fragment_to_atom_index"],
+        fragment_edge_to_bond=primary_view["fragment_edge_to_bond"],
+        fragment_edge_to_bond_index=primary_view["fragment_edge_to_bond_index"],
+        fragment_edge_to_attachment_atoms=primary_view["fragment_edge_to_attachment_atoms"],
+        fragment_types=primary_view["fragment_types"],
+        fragment_smiles=primary_view["fragment_smiles"],
+        fragment_views=extra_views or None,
         y=y,
         environment_or_group=environment_or_group,
         smiles=smiles,
         molecule_id=molecule_id,
         metadata=metadata,
     ).validate()
+
+
+def build_fragment_view_payload(mol, atom_graph, fragmenter, pooler):
+    """Build pooled features and provenance tensors for one fragmentation method."""
+    fragmentation = fragmenter.fragment(mol)
+    fragment_edge_attr = build_fragment_edge_features(mol, fragmentation)
+    fragment_x_static = pooler(
+        atom_graph.atom_x,
+        atom_graph.bond_index,
+        atom_graph.bond_attr,
+        fragmentation.atom_to_fragment,
+        num_fragments=fragmentation.num_fragments,
+    )
+    return {
+        "fragment_x_static": fragment_x_static,
+        "fragment_edge_index": fragmentation.fragment_edge_index,
+        "fragment_edge_attr": fragment_edge_attr,
+        "atom_to_fragment": fragmentation.atom_to_fragment,
+        "fragment_to_atoms": fragmentation.fragment_to_atoms,
+        "fragment_to_atom_index": build_fragment_to_atom_index(fragmentation.fragment_to_atoms),
+        "fragment_edge_to_bond": fragmentation.fragment_edge_to_bond,
+        "fragment_edge_to_bond_index": fragmentation.fragment_edge_to_bond_index,
+        "fragment_edge_to_attachment_atoms": fragmentation.fragment_edge_to_attachment_atoms,
+        "fragment_types": fragmentation.fragment_types,
+        "fragment_smiles": fragmentation.fragment_smiles,
+    }
 
 
 def build_fragment_to_atom_index(fragment_to_atoms):

@@ -22,7 +22,7 @@ from train_sugar import (
     merge_config_and_cli,
     write_final_metrics_report,
 )
-from main import build_parser
+from main import build_effective_config, build_parser
 from src.utils.run_outputs import prepare_run_outputs, write_run_manifest
 from src.training.checkpoint import (
     checkpoint_feature_dims,
@@ -117,7 +117,7 @@ class TrainConfigTests(unittest.TestCase):
             "raw_path": "data/raw/bbbp/BBBP.csv",
             "smiles_key": "smiles",
             "label_key": "p_np",
-            "fragmentation": "group_graph",
+            "view_fragmentations": {"group_graph": 1, "brics": 0, "recap": 0},
             "pooling": "mean_atom_and_internal_bond",
             "atom_feature_dim": 133,
             "bond_feature_dim": 14,
@@ -153,7 +153,7 @@ class TrainConfigTests(unittest.TestCase):
             "label_key": "cls_label",
             "environment_key": "domain_id",
             "metadata_keys": ["assay_id", "reg_label", "domain_id"],
-            "fragmentation": "group_graph",
+            "view_fragmentations": {"group_graph": 1, "brics": 0, "recap": 0},
             "pooling": "mean_atom_and_internal_bond",
             "atom_feature_dim": 133,
             "bond_feature_dim": 14,
@@ -179,6 +179,7 @@ class TrainConfigTests(unittest.TestCase):
         config = Config(
             {
                 "num_views": 3,
+                "view_fragmentations": {"group_graph": 3, "brics": 0, "recap": 0},
                 "num_classes": 2,
                 "gnn_layers": 1,
                 "hidden_dim": 16,
@@ -208,10 +209,67 @@ class TrainConfigTests(unittest.TestCase):
             [7, 8, 9],
         )
 
+    def test_fragment_ciga_views_can_use_configured_fragmentation_methods(self):
+        torch.manual_seed(123)
+        config = Config(
+            {
+                "num_views": 4,
+                "view_fragmentations": {"group_graph": 2, "brics": 1, "recap": 1},
+                "num_classes": 2,
+                "gnn_layers": 1,
+                "hidden_dim": 16,
+                "edge_ratio": 0.25,
+                "dropout": 0.0,
+                "fragment_sample_ratio": 0.95,
+                "sampler_seed": 7,
+            }
+        )
+
+        views = build_shared_initialized_views(
+            config,
+            atom_feat_dim=133,
+            fragment_feat_dim=149,
+            atom_edge_dim=14,
+            fragment_edge_dim=14,
+        )
+
+        self.assertEqual(
+            [view.fragmentation_method for view in views],
+            ["group_graph", "group_graph", "brics", "recap"],
+        )
+
+    def test_zero_count_view_fragmentations_are_allowed(self):
+        torch.manual_seed(123)
+        config = Config(
+            {
+                "num_views": 10,
+                "view_fragmentations": {"group_graph": 10, "brics": 0, "recap": 0},
+                "num_classes": 2,
+                "gnn_layers": 1,
+                "hidden_dim": 16,
+                "edge_ratio": 0.25,
+                "dropout": 0.0,
+                "fragment_sample_ratio": 0.95,
+                "sampler_seed": 7,
+            }
+        )
+
+        views = build_shared_initialized_views(
+            config,
+            atom_feat_dim=133,
+            fragment_feat_dim=149,
+            atom_edge_dim=14,
+            fragment_edge_dim=14,
+        )
+
+        self.assertEqual(len(views), 10)
+        self.assertTrue(all(view.fragmentation_method is None for view in views))
+
     def test_full_checkpoint_saves_resume_and_eval_metadata(self):
         config = Config(
             {
                 "num_views": 2,
+                "view_fragmentations": {"group_graph": 2, "brics": 0, "recap": 0},
                 "num_classes": 2,
                 "gnn_layers": 1,
                 "hidden_dim": 8,
@@ -268,7 +326,7 @@ class TrainConfigTests(unittest.TestCase):
         config = Config(
             {
                 "dataset": "drugood_lbap_core_ec50_assay",
-                "fragmentation": "group_graph",
+                "view_fragmentations": {"group_graph": 2, "brics": 0, "recap": 0},
                 "processed_dir": "data/processed/drugood_lbap_core_ec50_assay/group_graph",
                 "train_split": "train",
                 "validation_split": "ood_val",
@@ -317,7 +375,8 @@ class TrainConfigTests(unittest.TestCase):
             config = Config(
                 {
                     "dataset": "drugood_lbap_core_ec50_assay",
-                    "fragmentation": "brics",
+                    "view_fragmentations": {"group_graph": 0, "brics": 5, "recap": 0},
+                    "num_views": 5,
                     "processed_dir": "data/processed/drugood_lbap_core_ec50_assay/brics",
                     "output_root": tmp_dir,
                     "run_name": "unit_run",
@@ -367,10 +426,71 @@ class TrainConfigTests(unittest.TestCase):
             self.assertEqual(manifest["fragmentation"], "brics")
             self.assertEqual(manifest["metrics"]["ood_test"]["auc"], 0.75)
 
+    def test_prepare_run_outputs_names_mixed_recipe_directories(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = Config(
+                {
+                    "dataset": "drugood_lbap_core_ec50_assay",
+                    "view_fragmentations": {"group_graph": 5, "brics": 3, "recap": 2},
+                    "num_views": 10,
+                    "processed_dir": "data/processed/drugood_lbap_core_ec50_assay/mixed_group_graph5_brics3_recap2",
+                    "output_root": tmp_dir,
+                    "run_name": "unit_run",
+                }
+            )
+
+            run_dir = prepare_run_outputs(config, command_name="train")
+
+            expected = osp.join(
+                tmp_dir,
+                "drugood_lbap_core_ec50_assay",
+                "mixed_group_graph5_brics3_recap2",
+                "unit_run",
+            )
+            self.assertEqual(str(run_dir), expected)
+
+    def test_main_derives_processed_dir_from_view_fragmentations(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as handle:
+            handle.write(
+                "\n".join(
+                    [
+                        "dataset: drugood_lbap_core_ec50_assay",
+                        "processed_root: data/processed",
+                        "processed_dir:",
+                        "num_views: 10",
+                        "view_fragmentations:",
+                        "  group_graph: 5",
+                        "  brics: 3",
+                        "  recap: 2",
+                    ]
+                )
+            )
+            config_path = handle.name
+
+        try:
+            parser = build_parser()
+            args = parser.parse_args(["train", "--config", config_path])
+            config = build_effective_config(args)
+        finally:
+            import os
+
+            os.unlink(config_path)
+
+        self.assertEqual(
+            config.processed_dir,
+            osp.join(
+                "data",
+                "processed",
+                "drugood_lbap_core_ec50_assay",
+                "mixed_group_graph5_brics3_recap2",
+            ),
+        )
+
     def test_checkpoint_loader_accepts_legacy_view_state_dict_payload(self):
         config = Config(
             {
                 "num_views": 1,
+                "view_fragmentations": {"group_graph": 1, "brics": 0, "recap": 0},
                 "num_classes": 2,
                 "gnn_layers": 1,
                 "hidden_dim": 8,
