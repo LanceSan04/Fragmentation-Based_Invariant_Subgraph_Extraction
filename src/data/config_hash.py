@@ -15,10 +15,8 @@ The config hash is the lightweight cache key used for that check:
 
 This file intentionally hashes only fields that can change the actual
 preprocessed .pt contents. It excludes training/loader/model settings such as
-batch size, hidden dimensions, learning rate, number of SuGAr base models, or
-selection ratio. Those settings should not force expensive molecular
-preprocessing to be rerun because they do not change the serialized atom graph,
-fragment graph, mappings, labels, or provenance.
+batch size, hidden dimensions, learning rate, number of SuGAr base models,
+selection ratio, or the DataLoader shuffle ``seed``.
 """
 
 import hashlib
@@ -41,7 +39,6 @@ PREPROCESS_CONFIG_KEYS = [
     "generate_molecule_id",
     "metadata_keys",
     "split_ratios",
-    "seed",
     "strict",
     "view_fragmentations",
     "pooling",

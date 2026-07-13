@@ -124,9 +124,9 @@ preprocess_version: "0.1.0"
 # Multiple positive-count methods:
 #   stores method-prefixed fragment graph fields for each positive method.
 view_fragmentations:
-  group_graph: 1
-  brics: 1
-  recap: 1
+  group_graph: 6
+  brics: 0
+  recap: 0
 
 # Fragment/supernode feature construction.
 # Available now:

@@ -27,6 +27,13 @@ Examples:
     # Run the same full pipeline but suppress selected artifacts for this run
     .\.venv\Scripts\python.exe main.py full --config configs\experiment.yaml --no-checkpoint --no-training-curves
 
+    # Run the Optuna hyperparameter search (preprocesses first by default)
+    .\.venv\Scripts\python.exe main.py search --config configs\grid_search.yaml
+    .\.venv\Scripts\python.exe main.py search --config configs\grid_search.yaml --trials 20 --skip-preprocess
+
+    # Repeat-eval the search's chosen config on the test split (reuse processed data)
+    .\.venv\Scripts\python.exe main.py search-eval --config configs\grid_search.yaml --skip-preprocess
+
     # Preprocess the configured dataset and validate PyG loaders
     .\.venv\Scripts\python.exe main.py preprocess --config configs\experiment.yaml --validate-loaders
 
@@ -259,6 +266,62 @@ def run_full_command(args):
     return result
 
 
+def run_search_command(args):
+    """Preprocess the base dataset (by default), then run the Optuna search.
+
+    The search's per-trial training reads the processed ``.pt`` files produced
+    here, so preprocessing and every search run must share one processed_dir. We
+    resolve the base training config once (filling in processed_dir and applying
+    CLI overrides) and hand the same dict to both preprocessing and the study.
+    """
+    from src.data.preprocess import run_preprocessing
+    from scripts.grid_search import load_spec, run_search
+
+    config_path = Path(args.config)
+    if not config_path.is_absolute():
+        config_path = ROOT / config_path
+    spec, base = load_spec(str(config_path))
+
+    base_config = Config(apply_common_overrides(base, args))
+
+    if not args.dry_run and not args.skip_preprocess:
+        run_preprocessing(base_config.to_dict())
+        if args.validate_loaders:
+            validate_loaders(base_config.processed_dir, base_config)
+    elif args.skip_preprocess:
+        print("--skip-preprocess set; reusing existing processed .pt files.")
+
+    return run_search(spec, base_config.to_dict(), args)
+
+
+def run_search_eval_command(args):
+    """Preprocess the base dataset (by default), then run the search eval mode.
+
+    Mirrors ``run_search_command``: it resolves the base training config once so
+    preprocessing and every eval run share one processed_dir, then hands that
+    dict to ``grid_search.run_eval`` (which repeats the chosen config on the test
+    split and writes eval_results.json).
+    """
+    from src.data.preprocess import run_preprocessing
+    from scripts.grid_search import load_spec, run_eval
+
+    config_path = Path(args.config)
+    if not config_path.is_absolute():
+        config_path = ROOT / config_path
+    spec, base = load_spec(str(config_path))
+
+    base_config = Config(apply_common_overrides(base, args))
+
+    if not args.dry_run and not args.skip_preprocess:
+        run_preprocessing(base_config.to_dict())
+        if args.validate_loaders:
+            validate_loaders(base_config.processed_dir, base_config)
+    elif args.skip_preprocess:
+        print("--skip-preprocess set; reusing existing processed .pt files.")
+
+    return run_eval(spec, base_config.to_dict(), args)
+
+
 def run_eval_command(args):
     config = build_effective_config(args, checkpoint_path=args.checkpoint)
     results = evaluate_checkpoint(
@@ -486,6 +549,59 @@ def build_parser():
     full.add_argument("--loss-output-dir")
     add_subgraph_diagnostic_arguments(full)
     full.set_defaults(func=run_full_command)
+
+    search = subparsers.add_parser(
+        "search",
+        help="Preprocess (by default) then run the Optuna hyperparameter search.",
+    )
+    search.add_argument("--config", default="configs/grid_search.yaml")
+    search.add_argument("--dataset")
+    search.add_argument("--processed-root", dest="processed_root")
+    search.add_argument("--processed-dir", dest="processed_dir")
+    search.add_argument("--device", help="Override device (cuda|cpu) for every run.")
+    search.add_argument("--epochs", type=int, help="Override epochs for every run.")
+    search.add_argument("--trials", type=int, help="Number of Optuna trials (overrides spec).")
+    search.add_argument("--repeats", type=int, help="Runs per trial (overrides spec).")
+    search.add_argument(
+        "--skip-preprocess",
+        action="store_true",
+        help="Skip preprocessing and reuse existing processed .pt files.",
+    )
+    search.add_argument("--validate-loaders", action="store_true")
+    search.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Describe the search without preprocessing or training.",
+    )
+    search.set_defaults(func=run_search_command)
+
+    search_eval = subparsers.add_parser(
+        "search-eval",
+        help="Preprocess (by default) then repeat-eval the search's chosen config on the test split.",
+    )
+    search_eval.add_argument("--config", default="configs/grid_search.yaml")
+    search_eval.add_argument("--dataset")
+    search_eval.add_argument("--processed-root", dest="processed_root")
+    search_eval.add_argument("--processed-dir", dest="processed_dir")
+    search_eval.add_argument("--device", help="Override device (cuda|cpu) for every run.")
+    search_eval.add_argument("--epochs", type=int, help="Override epochs for every run.")
+    search_eval.add_argument("--runs", type=int, help="Number of eval runs (overrides spec).")
+    search_eval.add_argument(
+        "--params",
+        help="Path to a params JSON (default: config params_path or search/best_params.json).",
+    )
+    search_eval.add_argument(
+        "--skip-preprocess",
+        action="store_true",
+        help="Skip preprocessing and reuse existing processed .pt files.",
+    )
+    search_eval.add_argument("--validate-loaders", action="store_true")
+    search_eval.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Describe the eval without preprocessing or training.",
+    )
+    search_eval.set_defaults(func=run_search_eval_command)
 
     diagnostics = subparsers.add_parser("diagnostics", help="Run report/diagnostic helpers.")
     diagnostic_subparsers = diagnostics.add_subparsers(dest="diagnostic_command", required=True)

@@ -483,6 +483,22 @@ def run_training(config, resume_from=None):
         auc_str = f" | {test_split} AUC: {test_auc:.4f}" if test_auc is not None else ""
         print(f"{test_split} Loss: {test_loss:.4f} | {test_split} Accuracy: {test_acc:.4f}{auc_str}")
 
+    # Also record the validation split so callers (e.g. grid_search) that select
+    # on it can read metrics[validation_split]. Skip if it coincides with the
+    # test split (already recorded) to avoid a redundant pass.
+    if (
+        val_loader is not None
+        and validation_split is not None
+        and validation_split != test_split
+    ):
+        print(f"\nEvaluating ensemble on validation split {validation_split!r}...")
+        val_loss, val_acc, val_auc = _evaluate_ensemble(
+            ensemble, val_loader, device, track_roc_auc=config.track_roc_auc
+        )
+        metrics[validation_split] = {"loss": val_loss, "acc": val_acc, "auc": val_auc}
+        auc_str = f" | {validation_split} AUC: {val_auc:.4f}" if val_auc is not None else ""
+        print(f"{validation_split} Loss: {val_loss:.4f} | {validation_split} Accuracy: {val_acc:.4f}{auc_str}")
+
     for split_name in config.get("report_splits", []) or []:
         if split_name in {validation_split, test_split}:
             continue
