@@ -285,7 +285,7 @@ num_classes: 2
 gnn_layers: 3
 hidden_dim: 128
 edge_ratio: 0.5
-num_views: 3
+num_views: 6
 dropout: 0.1
 
 # Training-time random fragment-edge sampler inside each FragmentCIGA view.

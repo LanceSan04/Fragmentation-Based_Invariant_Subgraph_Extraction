@@ -40,8 +40,8 @@ output_dir: final_testing_outputs
 # it (only the remaining trials run); change the name (or delete study.db) to
 # start a fresh study, e.g. after editing the `grid` search space.
 study_name: parameter_search
-n_trials: 200                   # number of Optuna trials (parameter combinations)
-search_repeats: 5              # runs per trial (val metric averaged if >1)
+n_trials: 100                   # number of Optuna trials (parameter combinations)
+search_repeats: 3              # runs per trial (val metric averaged if >1)
 sampler_seed: 7                # Optuna TPE sampler seed (reproducible study)
 base_seed: 1                   # training run r uses training seed base_seed + r
 
@@ -56,7 +56,7 @@ params_path:
 # Fixed overrides applied to every run (search and eval). Keep runs light; the
 # script already suppresses checkpoints/manifests/diagnostics regardless.
 overrides:
-  epochs: 100
+  epochs: 40
 
 # The search space. Each key -> a list of candidate values; Optuna samples one
 # value per key per trial (trial.suggest_categorical). Unlike an exhaustive grid,

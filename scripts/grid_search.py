@@ -20,6 +20,11 @@ Every training run gets a run name, and its full effective config is saved to
 (checkpoints, run manifests, loss CSVs, diagnostics) are suppressed so a sweep
 stays light.
 
+During ``search``, pressing Ctrl+C once stops gracefully: the training run in
+flight finishes, the trial is scored from the repeats completed so far, the
+leaderboard/best-params snapshots are written, and the study halts (resume by
+re-running the same command). Pressing Ctrl+C a second time aborts immediately.
+
 Examples:
     .\.venv\Scripts\python.exe scripts\grid_search.py search --config configs\grid_search.yaml
     .\.venv\Scripts\python.exe scripts\grid_search.py search --config configs\grid_search.yaml --trials 20
@@ -31,6 +36,7 @@ import argparse
 import csv
 import json
 import random
+import signal
 import statistics
 import sys
 from datetime import datetime
@@ -186,10 +192,29 @@ def run_search(spec, base, args):
         print("dry-run: no training performed.")
         return
 
+    # Graceful Ctrl+C: the first press lets the in-flight training run finish,
+    # scores the trial from the repeats completed so far, and stops the study
+    # after the snapshot is written -- the trial lands as COMPLETE rather than
+    # FAIL, so it keeps its leaderboard row and its slot in the resume budget.
+    # A second press aborts immediately (previous behavior).
+    stop_requested = False
+
+    def handle_sigint(_signum, _frame):
+        nonlocal stop_requested
+        if stop_requested:
+            raise KeyboardInterrupt
+        stop_requested = True
+        print("\n[Ctrl+C] finishing the current training run, then saving and "
+              "stopping. Press Ctrl+C again to abort immediately.")
+
     def objective(trial):
         combo = {key: trial.suggest_categorical(key, list(grid[key])) for key in grid_keys}
         scores = []
         for r in range(repeats):
+            if stop_requested and scores:
+                print(f"--- trial {trial.number}: stop requested; scoring with "
+                      f"{len(scores)} of {repeats} repeat(s) ---")
+                break
             seed = base_seed + trial.number * repeats + r
             run_name = f"search_trial{trial.number:04d}_rep{r}_seed{seed}"
             print(f"\n=== {run_name} : {combo} ===")
@@ -227,47 +252,75 @@ def run_search(spec, base, args):
     if existing:
         print(f"  resuming study '{study_name}' from {storage_url}: "
               f"{existing} existing trial(s), running {remaining} more to reach {n_trials}")
-    study.optimize(objective, n_trials=remaining)
 
-    # Leaderboard: one row per trial with its params + objective + std/n/state.
     csv_path = out_dir / "leaderboard.csv"
-    fieldnames = ["trial", "state"] + grid_keys + [
-        f"val_{metric}_mean", f"val_{metric}_std", f"val_{metric}_n",
-    ]
-    completed = [t for t in study.trials if t.value is not None]
-    completed.sort(key=lambda t: t.value, reverse=maximize)
-    ordered = completed + [t for t in study.trials if t.value is None]
-    with csv_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        for trial in ordered:
-            row = {"trial": trial.number, "state": trial.state.name}
-            for key in grid_keys:
-                row[key] = trial.params.get(key)
-            row[f"val_{metric}_mean"] = trial.value
-            row[f"val_{metric}_std"] = trial.user_attrs.get(f"val_{metric}_std")
-            row[f"val_{metric}_n"] = trial.user_attrs.get(f"val_{metric}_n")
-            writer.writerow(row)
-
-    best = study.best_trial
-    best_params = {
-        "params": dict(best.params),
-        "overrides": overrides,
-        "validation_split": val_split,
-        "target_metric": metric,
-        f"val_{metric}_mean": best.value,
-        f"val_{metric}_std": best.user_attrs.get(f"val_{metric}_std"),
-        "trial_number": best.number,
-        "n_trials": n_trials,
-        "base_config": spec.get("_base_config_path"),
-        "created_at": datetime.now().isoformat(timespec="seconds"),
-    }
     best_json_path = out_dir / "best_params.json"
-    best_json_path.write_text(json.dumps(best_params, indent=2, sort_keys=True), encoding="utf-8")
+
+    def write_snapshot(snapshot_study, _frozen_trial=None):
+        """Rewrite leaderboard.csv + best_params.json from the study's current
+        state. Registered as an optimize() callback so both files stay current
+        after every finished trial; an interrupted sweep keeps its latest
+        standings instead of only the raw study.db."""
+        # Leaderboard: one row per trial with its params + objective + std/n/state.
+        fieldnames = ["trial", "state"] + grid_keys + [
+            f"val_{metric}_mean", f"val_{metric}_std", f"val_{metric}_n",
+        ]
+        completed = [t for t in snapshot_study.trials if t.value is not None]
+        completed.sort(key=lambda t: t.value, reverse=maximize)
+        ordered = completed + [t for t in snapshot_study.trials if t.value is None]
+        with csv_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            for trial in ordered:
+                row = {"trial": trial.number, "state": trial.state.name}
+                for key in grid_keys:
+                    row[key] = trial.params.get(key)
+                row[f"val_{metric}_mean"] = trial.value
+                row[f"val_{metric}_std"] = trial.user_attrs.get(f"val_{metric}_std")
+                row[f"val_{metric}_n"] = trial.user_attrs.get(f"val_{metric}_n")
+                writer.writerow(row)
+
+        if not completed:
+            return  # best_trial would raise; nothing meaningful to record yet
+        best = snapshot_study.best_trial
+        best_params = {
+            "params": dict(best.params),
+            "overrides": overrides,
+            "validation_split": val_split,
+            "target_metric": metric,
+            f"val_{metric}_mean": best.value,
+            f"val_{metric}_std": best.user_attrs.get(f"val_{metric}_std"),
+            "trial_number": best.number,
+            "n_trials": n_trials,
+            "base_config": spec.get("_base_config_path"),
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        best_json_path.write_text(json.dumps(best_params, indent=2, sort_keys=True),
+                                  encoding="utf-8")
+
+    def stop_when_requested(cb_study, _frozen_trial=None):
+        if stop_requested:
+            cb_study.stop()
+
+    previous_sigint = signal.signal(signal.SIGINT, handle_sigint)
+    try:
+        study.optimize(objective, n_trials=remaining,
+                       callbacks=[write_snapshot, stop_when_requested])
+    finally:
+        signal.signal(signal.SIGINT, previous_sigint)
+    # Covers remaining == 0 (pure resume/report run, where no callback fires).
+    write_snapshot(study)
+    if stop_requested:
+        print(f"\nStopped early at {len(study.trials)} of {n_trials} trial(s); "
+              "re-run the same command to resume.")
 
     print(f"\nWrote leaderboard: {csv_path}")
-    print(f"Wrote best params: {best_json_path}")
     print(f"Saved per-run configs under: {runs_dir}")
+    if not any(t.value is not None for t in study.trials):
+        print("No completed trials yet; best_params.json not written.")
+        return
+    best = study.best_trial
+    print(f"Wrote best params: {best_json_path}")
     print(f"Best trial {best.number}: {val_split}[{metric}]={best.value} params={best.params}")
 
 
