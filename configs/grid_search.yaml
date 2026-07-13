@@ -20,11 +20,7 @@
 # Base training config; every run starts from these defaults.
 base_config: configs/experiment.yaml
 
-# Metric read from run_training()'s metrics[split][target_metric].
-# target_metric accepted: auc | acc | loss (auc/acc maximized, loss minimized
-# unless you flip `maximize`).
-target_metric: auc
-validation_split: ood_val      # search ranks combinations by this split
+# Keep `maximize: true` since the objective is an AUC.
 test_split: ood_test           # eval reports / aggregates this split
 maximize: true
 
@@ -44,6 +40,7 @@ n_trials: 100                   # number of Optuna trials (parameter combination
 search_repeats: 3              # runs per trial (val metric averaged if >1)
 sampler_seed: 7                # Optuna TPE sampler seed (reproducible study)
 base_seed: 1                   # training run r uses training seed base_seed + r
+auc_ma_window: 5               # window (epochs) for the best moving-average
 
 # eval mode
 eval_runs: 5                   # times to run the chosen config on the test split
@@ -65,7 +62,7 @@ overrides:
 grid:
   lambda_contrast: [0.0, 0.1, 0.5, 1.0]
   lambda_diversity: [0.0, 2.0, 4.0, 8.0, 16.0]
-  lambda_irm: [0.0, 2.0, 4.0, 8.0, 16.0]
+  lambda_irm: [0.0, 1.0, 2.0, 4.0, 8.0]
   num_envs: [2, 4, 8]
   fragment_sample_ratio: [0.85, 0.9, 0.95]
   learning_rate: [0.001, 0.0005]

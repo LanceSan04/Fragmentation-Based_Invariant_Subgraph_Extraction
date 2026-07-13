@@ -6,9 +6,10 @@ existing ``run_training`` from ``train_sugar``:
 
   search
       Run an Optuna study that samples hyperparameters from the config ``grid``
-      (each list is a categorical choice). For each trial, record its
-      VALIDATION-split performance to a leaderboard CSV, then write
-      ``best_params.json`` for the best trial.
+      (each list is a categorical choice). Each trial is scored by its best
+      ``auc_ma_window``-epoch moving-average VALIDATION AUC (averaged over
+      repeats). Every trial lands on a leaderboard CSV, then
+      ``best_params.json`` is written for the best trial.
 
   eval
       Load ``best_params.json`` (or an explicit ``--params`` file), run training
@@ -123,12 +124,13 @@ def save_run_config(runs_dir, run_name, run_dict, combo, seed):
 
 
 def run_once(base, overrides, combo, seed, run_name, runs_dir):
-    """Name the run, save its config, train it, and return per-split metrics."""
+    """Name the run, save its config, train it, and return per-split metrics
+    plus the per-epoch training history."""
     run_dict = build_run_dict(base, overrides, combo, seed, run_name)
     save_run_config(runs_dir, run_name, run_dict, combo, seed)
     set_all_seeds(seed)
     result = run_training(Config(run_dict))
-    return result["metrics"]
+    return result["metrics"], result.get("history", {}) or {}
 
 
 # --------------------------------------------------------------------------- #
@@ -144,6 +146,24 @@ def _summarize(values):
         "std": statistics.stdev(clean) if len(clean) > 1 else 0.0,
         "n": len(clean),
     }
+
+
+def _best_moving_average(values, window):
+    """Best (max) mean over any `window` consecutive entries of a per-epoch
+    series. Windows containing None (metric unavailable that epoch) are
+    skipped; returns None when no full window of valid values exists (e.g.
+    fewer epochs than the window)."""
+    if window <= 0 or len(values) < window:
+        return None
+    best = None
+    for start in range(len(values) - window + 1):
+        chunk = values[start:start + window]
+        if any(v is None for v in chunk):
+            continue
+        avg = sum(float(v) for v in chunk) / window
+        if best is None or avg > best:
+            best = avg
+    return best
 
 
 def resolve_overrides(spec, args):
@@ -178,15 +198,15 @@ def run_search(spec, base, args):
     n_trials = args.trials if args.trials is not None else int(spec.get("n_trials", 40))
     base_seed = int(spec.get("base_seed", 7))
     sampler_seed = int(spec.get("sampler_seed", base_seed))
-    val_split = spec.get("validation_split", "ood_val")
-    metric = spec.get("target_metric", "auc")
     maximize = bool(spec.get("maximize", True))
+    ma_window = int(spec.get("auc_ma_window", 5))
 
     out_dir = Path(spec.get("output_dir", "final_testing_outputs")) / "search"
     runs_dir = out_dir / "runs"
 
     print(f"search: Optuna study of {n_trials} trial(s) x {repeats} repeat(s)")
-    print(f"  objective: mean {val_split}[{metric}] ({'maximize' if maximize else 'minimize'})")
+    print(f"  objective: mean best {ma_window}-epoch moving-average val AUC "
+          f"({'maximize' if maximize else 'minimize'})")
     print(f"  search space: { {key: grid[key] for key in grid_keys} }")
     if args.dry_run:
         print("dry-run: no training performed.")
@@ -209,25 +229,33 @@ def run_search(spec, base, args):
 
     def objective(trial):
         combo = {key: trial.suggest_categorical(key, list(grid[key])) for key in grid_keys}
-        scores = []
+        # Objective: best ma_window-epoch moving-average validation AUC, averaged
+        # over repeats.
+        best_ma_scores = []
         for r in range(repeats):
-            if stop_requested and scores:
+            if stop_requested and best_ma_scores:
                 print(f"--- trial {trial.number}: stop requested; scoring with "
-                      f"{len(scores)} of {repeats} repeat(s) ---")
+                      f"{len(best_ma_scores)} of {repeats} repeat(s) ---")
                 break
             seed = base_seed + trial.number * repeats + r
             run_name = f"search_trial{trial.number:04d}_rep{r}_seed{seed}"
             print(f"\n=== {run_name} : {combo} ===")
-            metrics = run_once(base, overrides, combo, seed, run_name, runs_dir)
-            scores.append((metrics.get(val_split, {}) or {}).get(metric))
-        summary = _summarize(scores)
-        trial.set_user_attr(f"val_{metric}_std", summary["std"])
-        trial.set_user_attr(f"val_{metric}_n", summary["n"])
-        if summary["mean"] is None:
-            raise optuna.TrialPruned()  # no valid metric this trial
-        print(f"--- trial {trial.number}: {val_split}[{metric}] mean={summary['mean']} "
-              f"std={summary['std']} n={summary['n']} ---")
-        return summary["mean"]
+            _metrics, history = run_once(base, overrides, combo, seed, run_name, runs_dir)
+            best_ma = _best_moving_average(history.get("val_auc") or [], ma_window)
+            best_ma_scores.append(best_ma)
+            if best_ma is not None:
+                print(f"    best {ma_window}-epoch moving-average val AUC: {best_ma:.4f}")
+            else:
+                print(f"    no full {ma_window}-epoch window of val AUC recorded "
+                      "for this run")
+        ma_summary = _summarize(best_ma_scores)
+        trial.set_user_attr("val_auc_best_ma_std", ma_summary["std"])
+        trial.set_user_attr("val_auc_best_ma_n", ma_summary["n"])
+        if ma_summary["mean"] is None:
+            raise optuna.TrialPruned()  # no valid moving-average AUC this trial
+        print(f"--- trial {trial.number}: best_ma{ma_window} val auc "
+              f"mean={ma_summary['mean']} std={ma_summary['std']} n={ma_summary['n']} ---")
+        return ma_summary["mean"]
 
     # Persist the study to SQLite so a multi-day sweep survives crashes/reboots
     # (an in-memory study would lose every completed trial). Re-running the same
@@ -263,7 +291,7 @@ def run_search(spec, base, args):
         standings instead of only the raw study.db."""
         # Leaderboard: one row per trial with its params + objective + std/n/state.
         fieldnames = ["trial", "state"] + grid_keys + [
-            f"val_{metric}_mean", f"val_{metric}_std", f"val_{metric}_n",
+            "val_auc_best_ma_mean", "val_auc_best_ma_std", "val_auc_best_ma_n",
         ]
         completed = [t for t in snapshot_study.trials if t.value is not None]
         completed.sort(key=lambda t: t.value, reverse=maximize)
@@ -275,9 +303,9 @@ def run_search(spec, base, args):
                 row = {"trial": trial.number, "state": trial.state.name}
                 for key in grid_keys:
                     row[key] = trial.params.get(key)
-                row[f"val_{metric}_mean"] = trial.value
-                row[f"val_{metric}_std"] = trial.user_attrs.get(f"val_{metric}_std")
-                row[f"val_{metric}_n"] = trial.user_attrs.get(f"val_{metric}_n")
+                row["val_auc_best_ma_mean"] = trial.value
+                row["val_auc_best_ma_std"] = trial.user_attrs.get("val_auc_best_ma_std")
+                row["val_auc_best_ma_n"] = trial.user_attrs.get("val_auc_best_ma_n")
                 writer.writerow(row)
 
         if not completed:
@@ -286,10 +314,10 @@ def run_search(spec, base, args):
         best_params = {
             "params": dict(best.params),
             "overrides": overrides,
-            "validation_split": val_split,
-            "target_metric": metric,
-            f"val_{metric}_mean": best.value,
-            f"val_{metric}_std": best.user_attrs.get(f"val_{metric}_std"),
+            "objective": f"best_ma{ma_window}_val_auc",
+            "val_auc_best_ma_mean": best.value,
+            "val_auc_best_ma_std": best.user_attrs.get("val_auc_best_ma_std"),
+            "auc_ma_window": ma_window,
             "trial_number": best.number,
             "n_trials": n_trials,
             "base_config": spec.get("_base_config_path"),
@@ -321,7 +349,8 @@ def run_search(spec, base, args):
         return
     best = study.best_trial
     print(f"Wrote best params: {best_json_path}")
-    print(f"Best trial {best.number}: {val_split}[{metric}]={best.value} params={best.params}")
+    print(f"Best trial {best.number}: best_ma{ma_window} val auc={best.value} "
+          f"params={best.params}")
 
 
 # --------------------------------------------------------------------------- #
@@ -376,7 +405,7 @@ def run_eval(spec, base, args):
         seed = base_seed + r
         run_name = f"eval_run{r:02d}_seed{seed}"
         print(f"\n=== {run_name} ===")
-        metrics = run_once(base, overrides, combo, seed, run_name, runs_dir)
+        metrics, _history = run_once(base, overrides, combo, seed, run_name, runs_dir)
         run_record = {"run_name": run_name, "seed": seed}
         for split in eval_splits:
             split_metrics = metrics.get(split, {}) or {}
