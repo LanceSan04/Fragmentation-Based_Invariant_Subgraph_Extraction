@@ -6,9 +6,11 @@ existing ``run_training`` from ``train_sugar``:
 
   search
       Run an Optuna study that samples hyperparameters from the config ``grid``
-      (each list is a categorical choice). For each trial, record its
-      VALIDATION-split performance to a leaderboard CSV, then write
-      ``best_params.json`` for the best trial.
+      (each list is a categorical choice). Every trial is scored by k-fold
+      cross-validation with ``search_repeats`` folds: the train split is
+      deterministically partitioned and repeat r trains with fold r held out
+      for validation. The mean held-out-fold metric is recorded to a
+      leaderboard CSV, and ``best_params.json`` is written for the best trial.
 
   eval
       Load ``best_params.json`` (or an explicit ``--params`` file), run training
@@ -77,11 +79,16 @@ def set_all_seeds(seed):
     torch.manual_seed(seed)
 
 
-def build_run_dict(base, overrides, combo, seed, run_name):
-    """Merge base config + fixed overrides + one combo, forcing quiet outputs."""
+def build_run_dict(base, overrides, combo, seed, run_name, extra=None):
+    """Merge base config + fixed overrides + one combo, forcing quiet outputs.
+
+    ``extra`` holds per-run settings (e.g. k-fold CV keys) that must not leak
+    into the overrides recorded in best_params.json and reused by eval.
+    """
     run_dict = dict(base)
     run_dict.update(overrides or {})
     run_dict.update(combo or {})
+    run_dict.update(extra or {})
     # Suppress all consolidated run artifacts: empty output_root makes
     # resolve_run_directory() a no-op, and loss_log_path=None disables the CSV.
     # We still record the effective config ourselves (see save_run_config).
@@ -122,9 +129,9 @@ def save_run_config(runs_dir, run_name, run_dict, combo, seed):
     return path
 
 
-def run_once(base, overrides, combo, seed, run_name, runs_dir):
+def run_once(base, overrides, combo, seed, run_name, runs_dir, extra=None):
     """Name the run, save its config, train it, and return per-split metrics."""
-    run_dict = build_run_dict(base, overrides, combo, seed, run_name)
+    run_dict = build_run_dict(base, overrides, combo, seed, run_name, extra=extra)
     save_run_config(runs_dir, run_name, run_dict, combo, seed)
     set_all_seeds(seed)
     result = run_training(Config(run_dict))
@@ -174,19 +181,31 @@ def run_search(spec, base, args):
         raise SystemExit("`grid` is empty; nothing to search.")
 
     overrides = resolve_overrides(spec, args)
-    repeats = args.repeats if args.repeats is not None else int(spec.get("search_repeats", 1))
     n_trials = args.trials if args.trials is not None else int(spec.get("n_trials", 40))
     base_seed = int(spec.get("base_seed", 7))
     sampler_seed = int(spec.get("sampler_seed", base_seed))
-    val_split = spec.get("validation_split", "ood_val")
     metric = spec.get("target_metric", "auc")
     maximize = bool(spec.get("maximize", True))
+
+    # Every trial is scored by k-fold CV where each repeat IS one fold:
+    # search_repeats sets the fold count. The train split is dealt into that
+    # many folds (fixed by cv_seed, identical for every trial), repeat r holds
+    # fold r out as its validation set, and the objective is the mean
+    # held-out-fold metric.
+    repeats = args.repeats if args.repeats is not None else int(spec.get("search_repeats", 5))
+    if repeats < 2:
+        raise SystemExit(
+            f"search_repeats must be >= 2 (it is the CV fold count; got {repeats})."
+        )
+    cv_seed = int(spec.get("cv_seed", base_seed))
+    val_split = str(spec.get("cv_val_split", "cv_val"))
 
     out_dir = Path(spec.get("output_dir", "final_testing_outputs")) / "search"
     runs_dir = out_dir / "runs"
 
-    print(f"search: Optuna study of {n_trials} trial(s) x {repeats} repeat(s)")
-    print(f"  objective: mean {val_split}[{metric}] ({'maximize' if maximize else 'minimize'})")
+    print(f"search: Optuna study of {n_trials} trial(s) x {repeats} fold(s)")
+    print(f"  objective: mean held-out-fold {metric} over {repeats}-fold CV "
+          f"of the train split ({'maximize' if maximize else 'minimize'})")
     print(f"  search space: { {key: grid[key] for key in grid_keys} }")
     if args.dry_run:
         print("dry-run: no training performed.")
@@ -209,16 +228,25 @@ def run_search(spec, base, args):
 
     def objective(trial):
         combo = {key: trial.suggest_categorical(key, list(grid[key])) for key in grid_keys}
+        # One training run per repeat, where repeat r holds fold r out of the
+        # train split.
         scores = []
-        for r in range(repeats):
+        for fold in range(repeats):
             if stop_requested and scores:
                 print(f"--- trial {trial.number}: stop requested; scoring with "
-                      f"{len(scores)} of {repeats} repeat(s) ---")
+                      f"{len(scores)} of {repeats} fold(s) ---")
                 break
-            seed = base_seed + trial.number * repeats + r
-            run_name = f"search_trial{trial.number:04d}_rep{r}_seed{seed}"
+            seed = base_seed + trial.number * repeats + fold
+            run_name = f"search_trial{trial.number:04d}_fold{fold}_seed{seed}"
+            extra = {
+                "validation_split": val_split,
+                "cv_folds": repeats,
+                "cv_fold": fold,
+                "cv_seed": cv_seed,
+                "cv_val_split": val_split,
+            }
             print(f"\n=== {run_name} : {combo} ===")
-            metrics = run_once(base, overrides, combo, seed, run_name, runs_dir)
+            metrics = run_once(base, overrides, combo, seed, run_name, runs_dir, extra=extra)
             scores.append((metrics.get(val_split, {}) or {}).get(metric))
         summary = _summarize(scores)
         trial.set_user_attr(f"val_{metric}_std", summary["std"])
@@ -287,6 +315,8 @@ def run_search(spec, base, args):
             "params": dict(best.params),
             "overrides": overrides,
             "validation_split": val_split,
+            "cv_folds": repeats,
+            "cv_seed": cv_seed,
             "target_metric": metric,
             f"val_{metric}_mean": best.value,
             f"val_{metric}_std": best.user_attrs.get(f"val_{metric}_std"),
@@ -441,7 +471,9 @@ def build_parser():
     search = subparsers.add_parser("search", parents=[common],
                                    help="Optuna study; record validation metric + best params.")
     search.add_argument("--trials", type=int, help="Number of Optuna trials (overrides spec).")
-    search.add_argument("--repeats", type=int, help="Runs per trial (overrides spec).")
+    search.add_argument("--repeats", type=int,
+                        help="Repeats per trial = CV fold count (overrides spec "
+                             "search_repeats); repeat r holds fold r out for validation.")
     search.set_defaults(func=run_search)
 
     evaluate = subparsers.add_parser("eval", parents=[common],

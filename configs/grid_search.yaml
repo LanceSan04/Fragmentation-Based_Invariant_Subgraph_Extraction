@@ -2,9 +2,10 @@
 #
 # Two modes share this file:
 #   search  -> runs an Optuna study that samples hyperparameters from `grid`
-#              (each list is a categorical choice), trains each trial, records
-#              validation-set performance to a leaderboard CSV, and writes
-#              best_params.json.
+#              (each list is a categorical choice), scores each trial by k-fold
+#              cross-validation of the train split (one training run per fold),
+#              records the mean held-out-fold performance to a leaderboard CSV,
+#              and writes best_params.json.
 #   eval    -> takes best_params.json (or --params PATH), runs the chosen config
 #              `eval_runs` times, and writes each run's TEST-set result plus the
 #              final mean/std to eval_results.json.
@@ -24,7 +25,7 @@ base_config: configs/experiment.yaml
 # target_metric accepted: auc | acc | loss (auc/acc maximized, loss minimized
 # unless you flip `maximize`).
 target_metric: auc
-validation_split: ood_val      # search ranks combinations by this split
+validation_split: ood_val      # unused by search: trials are ranked by held-out CV folds
 test_split: ood_test           # eval reports / aggregates this split
 maximize: true
 
@@ -41,9 +42,16 @@ output_dir: final_testing_outputs
 # start a fresh study, e.g. after editing the `grid` search space.
 study_name: parameter_search
 n_trials: 100                   # number of Optuna trials (parameter combinations)
-search_repeats: 3              # runs per trial (val metric averaged if >1)
+search_repeats: 3              # repeats per trial 
 sampler_seed: 7                # Optuna TPE sampler seed (reproducible study)
 base_seed: 1                   # training run r uses training seed base_seed + r
+
+# k-fold cross-validation (search mode). Every trial is scored by CV with
+# search_repeats folds: the train split is deterministically shuffled with
+# cv_seed and dealt into that many folds (the same partition for every trial),
+# repeat r holds fold r out as its validation set and trains on the rest, and
+# the trial's objective is the mean held-out-fold target_metric. 
+cv_seed: 1
 
 # eval mode
 eval_runs: 5                   # times to run the chosen config on the test split
