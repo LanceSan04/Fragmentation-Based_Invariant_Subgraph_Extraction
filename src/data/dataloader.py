@@ -84,42 +84,6 @@ def build_dataset(path, expected_metadata=None):
     return ProcessedMoleculeDataset(payload)
 
 
-def split_dataset_for_fold(dataset, cv_folds, cv_fold, seed=0):
-    """Partition one dataset into (train, val) subsets for k-fold CV.
-
-    Fold membership is a deterministic function of (len(dataset), cv_folds,
-    seed): indices are shuffled with a local RNG seeded by ``seed`` and dealt
-    round-robin into ``cv_folds`` folds, so every run sharing those values
-    sees identical folds regardless of training seed. Fold ``cv_fold`` becomes
-    the validation subset; the remaining folds become the training subset.
-    """
-    cv_folds = int(cv_folds)
-    cv_fold = int(cv_fold)
-    if cv_folds < 2:
-        raise ValueError(f"cv_folds must be >= 2, got {cv_folds}")
-    if not 0 <= cv_fold < cv_folds:
-        raise ValueError(f"cv_fold must be in [0, {cv_folds - 1}], got {cv_fold}")
-    total = len(dataset)
-    if total < cv_folds:
-        raise ValueError(f"Dataset has {total} example(s); cannot form {cv_folds} folds")
-
-    indices = list(range(total))
-    random.Random(seed).shuffle(indices)
-    val_indices = set(indices[cv_fold::cv_folds])
-
-    records = dataset.datas["molecule_data"]
-    metadata = dataset.datas.get("metadata")
-    train_subset = ProcessedMoleculeDataset({
-        "molecule_data": [records[i] for i in range(total) if i not in val_indices],
-        "metadata": metadata,
-    })
-    val_subset = ProcessedMoleculeDataset({
-        "molecule_data": [records[i] for i in range(total) if i in val_indices],
-        "metadata": metadata,
-    })
-    return train_subset, val_subset
-
-
 def build_dataloader(
     dataset,
     batch_size,
@@ -162,54 +126,12 @@ def build_split_dataloaders(processed_dir, config):
 
     train_split = _config_get(config, "train_split", "train")
 
-    # Optional k-fold cross-validation: when cv_folds >= 2 and cv_fold is set,
-    # the train split file is partitioned in memory and one fold is held out as
-    # the validation loader (registered under cv_val_split) instead of loading
-    # a separate validation file.
-    cv_folds = int(_config_get(config, "cv_folds", 0) or 0)
-    cv_fold = _config_get(config, "cv_fold", None)
-    cv_active = cv_folds >= 2 and cv_fold is not None
-    if cv_active:
-        cv_fold = int(cv_fold)
-    cv_val_split = str(_config_get(config, "cv_val_split", "cv_val"))
-
     loaders = {}
     for split_name in configured_split_names(config):
-        if cv_active and split_name == cv_val_split:
-            continue  # built below from the train split, not from a file
         split_path = osp.join(processed_dir, f"{split_name}.pt")
         if not osp.exists(split_path):
             continue
         dataset = build_dataset(split_path, expected_metadata=expected_metadata)
-        if cv_active and split_name == train_split:
-            train_subset, val_subset = split_dataset_for_fold(
-                dataset, cv_folds, cv_fold,
-                seed=_config_get(config, "cv_seed", 0),
-            )
-            loaders[train_split] = build_dataloader(
-                train_subset,
-                batch_size=batch_size,
-                shuffle=True,
-                num_workers=num_workers,
-                drop_last=bool(_config_get(config, "drop_last", False)),
-                pin_memory=pin_memory,
-                seed=seed,
-                follow_batch=follow_batch,
-            )
-            loaders[cv_val_split] = build_dataloader(
-                val_subset,
-                batch_size=batch_size,
-                shuffle=False,
-                num_workers=num_workers,
-                drop_last=False,
-                pin_memory=pin_memory,
-                seed=seed,
-                follow_batch=follow_batch,
-            )
-            print(f"k-fold CV: train split {split_name!r} -> fold {cv_fold + 1}/{cv_folds} "
-                  f"held out as {cv_val_split!r} "
-                  f"({len(train_subset)} train / {len(val_subset)} val examples)")
-            continue
         loaders[split_name] = build_dataloader(
             dataset,
             batch_size=batch_size,
