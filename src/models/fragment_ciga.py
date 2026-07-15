@@ -3,9 +3,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch_geometric.explain.algorithm.utils import set_masks, clear_masks
 
 from src.models.fragment_masker import FragmentMasker, segment_topk_mask
-from src.models.gnn_encoders import SimpleGAT
+from src.models.gnn_encoders import SimpleGNN
 from src.models.fragment_graph import build_fragment_graph_batch
 from src.models.fragment_edge_sampler import FragmentEdgeSampler
 from src.models.atom_reconstructor import reconstruct_batch, reconstruct_batch_fast
@@ -37,7 +38,14 @@ def restore_full_edge_outputs(
 
 
 class AtomClassifier(nn.Module):
-    """GAT classifier for atom-level invariant subgraphs."""
+    """GIN(E) classifier for atom-level invariant subgraphs.
+
+    Uses a GINE backbone (``aggr="add"``) to mirror SuGAr/CIGA's DrugOOD
+    classifier. GIN's summed messages compose cleanly with the ``set_masks``
+    edge gate below — ``mlp((1+eps)x + sum(gate_ij * msg_ij))`` — whereas an
+    attention backbone computes its softmax coefficients independently of the
+    gate, blunting the very signal that trains the fragment scorer.
+    """
 
     def __init__(
         self,
@@ -49,7 +57,7 @@ class AtomClassifier(nn.Module):
         edge_dim=BOND_FDIM,
     ):
         super().__init__()
-        self.gnn = SimpleGAT(input_dim, hidden_dim, num_layers, dropout, edge_dim=edge_dim)
+        self.gnn = SimpleGNN(input_dim, hidden_dim, num_layers, dropout, edge_dim=edge_dim)
         self.pred_head = nn.Sequential(
             nn.Linear(hidden_dim, 2 * hidden_dim),
             nn.ReLU(),
@@ -57,10 +65,25 @@ class AtomClassifier(nn.Module):
         )
 
     def forward(self, data, return_embeddings=False):
-        edge_attr = data.edge_attr
-        if hasattr(data, "edge_weight") and data.edge_weight is not None:
-            edge_attr = edge_attr * data.edge_weight.view(-1, 1)
-        _, h_graph = self.gnn(data.x, data.edge_index, data.batch, edge_attr=edge_attr)
+        edge_weight = getattr(data, "edge_weight", None)
+        # CIGA-style differentiable subgraph gating: use the fragment-edge
+        # attention (carried on ``edge_weight``) as a multiplicative mask on every
+        # message in every GNN layer, mirroring SuGAr's ``set_masks`` mechanism.
+        # This is the path that lets the classification loss train the fragment
+        # scorer; scaling ``edge_attr`` instead only weakly perturbs the conv and
+        # cannot suppress an edge. ``apply_sigmoid=False`` since the scores are
+        # already in [0, 1]. GINE adds no self-loops, so the mask aligns exactly
+        # with ``edge_index``; the ``(1+eps)x`` self term is ungated (full
+        # strength), matching SuGAr's GIN. Skip gating when the subgraph has no
+        # edges.
+        gate = edge_weight is not None and data.edge_index.numel() > 0
+        if gate:
+            set_masks(self.gnn, edge_weight, data.edge_index, apply_sigmoid=False)
+        try:
+            _, h_graph = self.gnn(data.x, data.edge_index, data.batch, edge_attr=data.edge_attr)
+        finally:
+            if gate:
+                clear_masks(self.gnn)
         logits = self.pred_head(h_graph)
         if return_embeddings:
             return logits, h_graph

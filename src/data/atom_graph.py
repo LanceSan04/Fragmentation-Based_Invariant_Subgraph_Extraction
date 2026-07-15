@@ -13,8 +13,14 @@ from rdkit import Chem
 
 
 MAX_ATOMIC_NUM = 100
+# Compact atomic-number encoding over the elements that actually occur in
+# drug-like molecules (DrugOOD/OGB scale) instead of a 100-way one-hot. The
+# full one-hot let the classifier identify atoms by element and fit the training
+# distribution without using graph structure — masking the invariant-subgraph
+# bottleneck. Uncommon elements fall into the onek_encoding_unk overflow slot.
+DRUG_LIKE_ELEMENTS = [1, 5, 6, 7, 8, 9, 14, 15, 16, 17, 34, 35, 53]
 ATOM_FEATURES = {
-    'atomic_num': list(range(MAX_ATOMIC_NUM)),
+    'atomic_num': DRUG_LIKE_ELEMENTS,
     'degree': [0, 1, 2, 3, 4, 5],
     'formal_charge': [-1, -2, 1, 2, 0],
     'chiral_tag': [0, 1, 2, 3],
@@ -152,7 +158,7 @@ def atom_features(atom: Chem.rdchem.Atom, functional_groups=None):
     :param functional_groups: A k-hot vector indicating the functional groups the atom belongs to.
     :return: A list containing the atom features.
     """
-    features = onek_encoding_unk(atom.GetAtomicNum() - 1, ATOM_FEATURES['atomic_num']) + \
+    features = onek_encoding_unk(atom.GetAtomicNum(), ATOM_FEATURES['atomic_num']) + \
                onek_encoding_unk(atom.GetTotalDegree(), ATOM_FEATURES['degree']) + \
                onek_encoding_unk(atom.GetFormalCharge(), ATOM_FEATURES['formal_charge']) + \
                onek_encoding_unk(int(atom.GetChiralTag()), ATOM_FEATURES['chiral_tag']) + \

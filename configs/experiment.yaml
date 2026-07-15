@@ -138,12 +138,14 @@ view_fragmentations:
 pooling: mean_atom_and_internal_bond
 
 # Fixed dimensions from the copied Group Graph encoders.
-# Current fragment vectors are 149 dims: 133 atom + 14 bond + 2 size features.
+# Current fragment vectors are 62 dims: 46 atom + 14 bond + 2 size features.
+# (atom_feature_dim dropped 133->46 after compacting the atomic-number one-hot
+# to drug-like elements, to deny the classifier an element-identity shortcut.)
 # Accepted: positive integers. Do not change unless the featurizers/pooler
 # change and preprocessed .pt files are regenerated.
-atom_feature_dim: 133
+atom_feature_dim: 46
 bond_feature_dim: 14
-fragment_feature_dim: 149
+fragment_feature_dim: 62
 
 # Output directory for generated .pt files and training input.
 # preprocess.py writes one `{split}.pt` file per selected split here.
@@ -379,7 +381,7 @@ lambda_diversity: 4.0
 lambda_irm: 4.0
 num_envs: 4
 env_split_key: domain_id
-env_bucket_strategy: size
+env_bucket_strategy: value
 contrast_temperature: 0.1
 contrast_sampling: mul
 

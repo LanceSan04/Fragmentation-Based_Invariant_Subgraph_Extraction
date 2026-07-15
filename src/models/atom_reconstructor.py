@@ -333,7 +333,10 @@ def build_reconstructed_bond_weight(
         or (selected_unique_bonds[positions] != selected_bond_indices).any()
     ):
         raise ValueError("selected fragment edge references a bond missing from reconstruction")
-    weights[positions] = selected_edge_weights + 1
+    # Raw fragment-edge score (in [0, 1]) so a low score suppresses the boundary
+    # bond's messages toward zero when used as a classifier edge-mask gate.
+    # Internal bonds keep weight 1.0 (intra-fragment structure stays connected).
+    weights[positions] = selected_edge_weights
     return weights
 
 
@@ -403,7 +406,7 @@ def reconstruct_batch_fast(
     the globally-offset batch tensors directly, avoiding the per-molecule
     ``to_data_list`` / ``from_data_list`` round-trip in :func:`reconstruct_batch`.
 
-    The classifier (GATv2 + mean pool) is order-invariant over edges, so edges
+    The classifier (GINE + mean pool) is order-invariant over edges, so edges
     are emitted in a different order than :func:`reconstruct_batch`, but ``x`` and
     ``batch`` share the same molecule-major node order and ``edge_attr`` /
     ``edge_weight`` stay aligned column-for-column with ``edge_index`` — giving
@@ -455,17 +458,48 @@ def reconstruct_batch_fast(
     else:
         selected_bonds = torch.empty((0,), dtype=torch.long, device=device)
 
-    # Per-bond weight: internal bonds 1.0, selected boundary bonds score + 1
-    # (matches build_reconstructed_bond_weight). selected_bonds is sorted.
+    # Per-fragment soft importance from the continuous fragment-edge scores. A
+    # fragment is important if it participates in a strongly-scored edge, so we
+    # take the MAX incident score (max, not mean, so training-time sampler-dropped
+    # edges — which carry score 0 in the restored vector — don't dilute it).
+    # Fragments with no incident edge (single-fragment molecules) keep weight 1.0.
+    edge_scores_full = None
+    frag_importance = None
+    if selected_fragment_edge_weight is not None:
+        edge_scores_full = torch.as_tensor(
+            selected_fragment_edge_weight, dtype=batch.x.dtype, device=device
+        )
+        num_frag_nodes = frag_node_batch.size(0)
+        frag_importance = edge_scores_full.new_ones(num_frag_nodes)
+        if frag_edge_index.numel():
+            endpoints = frag_edge_index.reshape(-1)
+            incident_max = edge_scores_full.new_zeros(num_frag_nodes).scatter_reduce(
+                0, endpoints, edge_scores_full.repeat(2), reduce="amax", include_self=False
+            )
+            frag_has_edge = torch.zeros(num_frag_nodes, dtype=torch.bool, device=device)
+            frag_has_edge[endpoints] = True
+            frag_importance = torch.where(frag_has_edge, incident_max, frag_importance)
+
+    # Per-bond weight (soft graph-wide gate, no hard fragment dropping):
+    #   internal bonds -> their fragment's soft importance, so the scorer can
+    #     smoothly attenuate a spurious fragment's whole internal structure
+    #     without deleting it (a coarse fragment drop destroys signal);
+    #   boundary bonds -> their own fragment-edge score.
+    # These bond sets are disjoint (internal = same fragment, boundary = across
+    # fragments). selected_bonds is sorted.
     bond_weight = torch.ones(selected_bonds.numel(), dtype=batch.x.dtype, device=device)
-    if selected_bonds.numel() and boundary_bonds.numel():
-        if selected_fragment_edge_weight is None:
-            boundary_scores = torch.ones(boundary_bonds.numel(), dtype=batch.x.dtype, device=device)
-        else:
-            weight = torch.as_tensor(selected_fragment_edge_weight, dtype=batch.x.dtype, device=device)
-            boundary_scores = weight[mask]
-        positions = torch.searchsorted(selected_bonds, boundary_bonds)
-        bond_weight[positions] = boundary_scores + 1
+    if selected_bonds.numel():
+        if frag_importance is not None and internal_bonds.numel():
+            internal_frag = atom_to_fragment[bond_index[0, internal_bonds]]
+            pos_internal = torch.searchsorted(selected_bonds, internal_bonds)
+            bond_weight[pos_internal] = frag_importance[internal_frag]
+        if boundary_bonds.numel():
+            if edge_scores_full is None:
+                boundary_scores = torch.ones(boundary_bonds.numel(), dtype=batch.x.dtype, device=device)
+            else:
+                boundary_scores = edge_scores_full[mask]
+            positions = torch.searchsorted(selected_bonds, boundary_bonds)
+            bond_weight[positions] = boundary_scores
 
     if selected_bonds.numel():
         src_local = atom_map[bond_index[0, selected_bonds]]

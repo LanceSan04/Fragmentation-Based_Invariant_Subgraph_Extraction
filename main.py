@@ -90,6 +90,7 @@ COMMON_OVERRIDES = (
     "hidden_dim",
     "gnn_layers",
     "batch_size",
+    "edge_ratio",
     "learning_rate",
     "weight_decay",
     "lambda_contrast",
@@ -452,6 +453,7 @@ def add_common_arguments(parser):
     parser.add_argument("--hidden-dim", dest="hidden_dim", type=int)
     parser.add_argument("--gnn-layers", dest="gnn_layers", type=int)
     parser.add_argument("--batch-size", dest="batch_size", type=int)
+    parser.add_argument("--edge-ratio", dest="edge_ratio", type=float)
     parser.add_argument("--learning-rate", dest="learning_rate", type=float)
     parser.add_argument("--weight-decay", dest="weight_decay", type=float)
     parser.add_argument("--lambda-contrast", dest="lambda_contrast", type=float)
