@@ -47,6 +47,8 @@ class SuGARTrainer:
         track_roc_auc=True,
         loss_log_path=None,
         aggregation_mode="mean",
+        selection_ma_window=1,
+        selection_weight_avg=False,
     ):
         """
         Args:
@@ -80,6 +82,15 @@ class SuGARTrainer:
                 SuGAREnsemble used to score validation. Must match the mode used
                 for final test-time inference so best-epoch/early-stop selection
                 is made on the same shared-subgraph path.
+            selection_ma_window: Window (in epochs) for the trailing moving
+                average of the validation selection metric used to pick the
+                best epoch. ``1`` reproduces raw single-best-epoch selection;
+                a larger window (e.g. 5, matching the grid-search objective)
+                smooths per-epoch validation-AUC noise so the restored
+                checkpoint is not chosen on an upward-biased noise peak.
+            selection_weight_avg: If True, restore an SWA-style average of the
+                top ``selection_ma_window`` snapshots (ranked by smoothed
+                metric) instead of the single best snapshot. Off by default.
         """
         self.views = [v.to(device) for v in views]
         self.device = device
@@ -103,6 +114,8 @@ class SuGARTrainer:
         # to the same view objects, so weight updates are reflected without any
         # re-wrapping.
         self.aggregation_mode = aggregation_mode
+        self.selection_ma_window = max(1, int(selection_ma_window))
+        self.selection_weight_avg = bool(selection_weight_avg)
         self.ensemble = SuGAREnsemble(self.views, aggregation_mode=aggregation_mode)
         if track_roc_auc and not _SKLEARN_AVAILABLE:
             print("Warning: scikit-learn not found; ROC-AUC tracking disabled.")
@@ -132,6 +145,10 @@ class SuGARTrainer:
         """Compute total loss plus named components from per-view outputs."""
         components = self._empty_components(labels.device)
 
+        # Reduction convention: per-view terms are SUMMED over views, matching
+        # SuGAr, which backpropagates the sum of its base models' losses. Any
+        # per-view term that is averaged instead has its lambda silently divided
+        # by num_views relative to the prediction term.
         per_view_losses = [
             prediction_loss(pv["predictions"], labels)
             for pv in per_view
@@ -162,6 +179,10 @@ class SuGARTrainer:
             diversity_terms = []
             grouped = {}
             for pv in per_view:
+                # ERM views produce no fragment scores, so there is nothing to
+                # diversify; they cannot participate in this term.
+                if pv.get("fragment_scores") is None:
+                    continue
                 grouped.setdefault(pv.get("fragmentation_method"), []).append(pv)
             for method_views in grouped.values():
                 if len(method_views) < 2:
@@ -178,6 +199,10 @@ class SuGARTrainer:
                     )
                 )
             if diversity_terms:
+                # Averaged across fragmentation methods, not views: each method
+                # is a separate fragment-edge space whose scores are not
+                # comparable, and pairwise_diversity_loss already aggregates
+                # over the view pairs within a method.
                 diversity = torch.stack(diversity_terms).mean()
             else:
                 diversity = labels.new_zeros(())
@@ -190,7 +215,7 @@ class SuGARTrainer:
                 for pv in per_view
             ]
             if irm_terms:
-                irm = torch.stack(irm_terms).mean()
+                irm = torch.stack(irm_terms).sum()
                 components["irm_loss"] = irm
                 components["irm_loss_weighted"] = self.lambda_irm * irm
 
@@ -387,12 +412,16 @@ class SuGARTrainer:
         per_view = []
         for view in self.views:
             method = getattr(view, "fragmentation_method", None)
-            if method not in fragment_batches:
-                fragment_batches[method] = build_fragment_graph_batch(
-                    batch,
-                    method=method,
-                ).to(self.device)
-            fragment_batch = fragment_batches[method]
+            if getattr(view, "erm_baseline", False):
+                # ERM views never touch the fragment graph; don't build one.
+                fragment_batch = None
+            else:
+                if method not in fragment_batches:
+                    fragment_batches[method] = build_fragment_graph_batch(
+                        batch,
+                        method=method,
+                    ).to(self.device)
+                fragment_batch = fragment_batches[method]
             if use_aux:
                 pred, interm = view(batch, return_intermediates=True, fragment_batch=fragment_batch)
                 per_view.append({"predictions": pred, **interm})
@@ -584,6 +613,11 @@ class SuGARTrainer:
             "val_selection_metric_name",
             "val_acc_per_view",
             "val_auc_per_view",
+            # Diagnostic-only per-epoch test-split metrics (populated only when a
+            # diagnostic_loader is passed to train()); never used for selection.
+            "test_loss",
+            "test_acc",
+            "test_auc",
         )
 
     def _initialize_loss_log(self):
@@ -602,8 +636,16 @@ class SuGARTrainer:
             writer = csv.DictWriter(log_file, fieldnames=self._loss_log_fieldnames())
             writer.writerow(row)
 
-    def train(self, train_loader, val_loader=None, num_epochs=100, patience=20, restore_best_weights=True):
-        """Full training loop with AUC-aware per-view best-weight tracking."""
+    def train(self, train_loader, val_loader=None, num_epochs=100, patience=20,
+              restore_best_weights=True, diagnostic_loader=None):
+        """Full training loop with AUC-aware per-view best-weight tracking.
+
+        ``diagnostic_loader`` (typically the test split) is evaluated once per
+        epoch purely to log its per-epoch AUC alongside validation. It is NEVER
+        read for checkpoint selection or early stopping — it exists only to make
+        the validation/test decoupling visible. Leaking it into selection would
+        be test-set peeking, so keep it strictly out of the selection path.
+        """
         num_views = len(self.views)
         history = {
             "train_loss": [],
@@ -615,6 +657,9 @@ class SuGARTrainer:
             "val_auc_per_view": [],
             "val_selection_metric": [],
             "val_selection_metric_name": [],
+            "test_loss": [],
+            "test_acc": [],
+            "test_auc": [],
         }
         for key in self.loss_component_keys():
             history[f"train_{key}"] = []
@@ -624,7 +669,19 @@ class SuGARTrainer:
         # (the true inference path), and all views are snapshotted together at
         # that single epoch. Restoring each view from its own independently-best
         # epoch would mix maskers the aggregated score vote never validated.
-        best_snapshot = None
+        #
+        # Selection is driven by a trailing moving average of the validation
+        # metric (window = selection_ma_window) rather than the raw per-epoch
+        # value: the max of a noisy AUC curve is upward-biased, so single-best
+        # selection latches onto noise peaks that do not transfer to the (OOD,
+        # different-domain) test split. window=1 reproduces the old behavior.
+        raw_metric_history = []
+        # Retained top snapshots ranked by smoothed metric. Capacity is 1 for
+        # plain best-epoch restore, or the MA window when averaging weights.
+        snapshot_capacity = (
+            self.selection_ma_window if self.selection_weight_avg else 1
+        )
+        retained_snapshots = []  # list of dicts: {metric, epoch, weights}
         best_snapshot_epoch = None
         best_val_metric = -float("inf")
         best_metric_label = "acc"
@@ -684,12 +741,23 @@ class SuGARTrainer:
                     f"Selection val_{metric_label}: {val_selection_metric:.4f}"
                 )
 
-                if val_selection_metric > best_val_metric:
-                    best_val_metric = val_selection_metric
+                raw_metric_history.append(val_selection_metric)
+                window = raw_metric_history[-self.selection_ma_window:]
+                smoothed_metric = sum(window) / len(window)
+
+                if smoothed_metric > best_val_metric:
+                    best_val_metric = smoothed_metric
                     patience_counter = 0
                     if restore_best_weights:
-                        best_snapshot = [deepcopy(v.state_dict()) for v in self.views]
-                        best_snapshot_epoch = epoch + 1
+                        weights = [deepcopy(v.state_dict()) for v in self.views]
+                        self._retain_snapshot(
+                            retained_snapshots,
+                            snapshot_capacity,
+                            smoothed_metric,
+                            epoch + 1,
+                            weights,
+                        )
+                        best_snapshot_epoch = retained_snapshots[0]["epoch"]
                 else:
                     patience_counter += 1
 
@@ -700,6 +768,24 @@ class SuGARTrainer:
                 print(
                     f"Epoch {epoch + 1}/{num_epochs} | "
                     f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f}"
+                )
+
+            # Diagnostic-only: log the test-split curve alongside validation so
+            # the val/test decoupling is visible. Not used for any decision.
+            test_loss = None
+            test_acc = None
+            test_auc = None
+            if diagnostic_loader is not None:
+                test_loss, test_acc, test_auc, _ = self.evaluate_all(diagnostic_loader)
+                history["test_loss"].append(test_loss)
+                history["test_acc"].append(test_acc)
+                history["test_auc"].append(test_auc)
+                test_auc_str = (
+                    f" | Test AUC: {test_auc:.4f}" if test_auc is not None else ""
+                )
+                print(
+                    f"           (diagnostic) Test Loss: {test_loss:.4f} | "
+                    f"Test Acc: {test_acc:.4f}{test_auc_str}"
                 )
 
             self._append_loss_log_row(
@@ -730,19 +816,130 @@ class SuGARTrainer:
                     "val_auc_per_view": "|".join(
                         "" if v is None else f"{v:.6f}" for v in view_val_aucs
                     ),
+                    "test_loss": test_loss,
+                    "test_acc": test_acc,
+                    "test_auc": test_auc,
                 }
             )
 
             if should_stop:
                 break
 
-        if restore_best_weights and best_snapshot is not None:
-            for view, weights in zip(self.views, best_snapshot):
-                view.load_state_dict(weights)
-            print(
-                f"Restored best joint snapshot from epoch {best_snapshot_epoch} "
-                f"across all {num_views} views "
-                f"(best ensemble val_{best_metric_label} = {best_val_metric:.4f})"
+        if restore_best_weights and retained_snapshots:
+            window_note = (
+                f" (MA window {self.selection_ma_window})"
+                if self.selection_ma_window > 1
+                else ""
             )
+            if self.selection_weight_avg and len(retained_snapshots) > 1:
+                epochs = [s["epoch"] for s in retained_snapshots]
+                averaged = self._average_snapshots(
+                    [s["weights"] for s in retained_snapshots]
+                )
+                for view, weights in zip(self.views, averaged):
+                    view.load_state_dict(weights)
+                print(
+                    f"Restored SWA average of {len(retained_snapshots)} snapshots "
+                    f"from epochs {sorted(epochs)} across all {num_views} views "
+                    f"(best smoothed val_{best_metric_label} = {best_val_metric:.4f}"
+                    f"{window_note})"
+                )
+            else:
+                best = retained_snapshots[0]
+                for view, weights in zip(self.views, best["weights"]):
+                    view.load_state_dict(weights)
+                print(
+                    f"Restored best joint snapshot from epoch {best['epoch']} "
+                    f"across all {num_views} views "
+                    f"(best smoothed val_{best_metric_label} = {best_val_metric:.4f}"
+                    f"{window_note})"
+                )
 
+        self._report_selection_diagnostics(history, best_snapshot_epoch, best_metric_label)
         return history
+
+    @staticmethod
+    def _retain_snapshot(retained, capacity, metric, epoch, weights):
+        """Keep the top-``capacity`` snapshots ranked by smoothed metric (desc).
+
+        ``retained`` is mutated in place and kept sorted best-first so callers
+        can read ``retained[0]`` as the current best.
+        """
+        retained.append({"metric": metric, "epoch": epoch, "weights": weights})
+        retained.sort(key=lambda s: s["metric"], reverse=True)
+        del retained[capacity:]
+
+    @staticmethod
+    def _average_snapshots(snapshots):
+        """Element-wise average a list of per-view state_dict lists (SWA-style).
+
+        Each snapshot is a list of state_dicts (one per view). Only floating
+        tensors are averaged; integer/bool buffers (e.g. sampler call counts)
+        are taken from the first snapshot to avoid corrupting them.
+        """
+        num_views = len(snapshots[0])
+        averaged = []
+        for view_idx in range(num_views):
+            base = snapshots[0][view_idx]
+            merged = {}
+            for key, ref in base.items():
+                if torch.is_floating_point(ref):
+                    stacked = torch.stack(
+                        [snap[view_idx][key].float() for snap in snapshots], dim=0
+                    )
+                    merged[key] = stacked.mean(dim=0).to(ref.dtype)
+                else:
+                    merged[key] = ref.clone()
+            averaged.append(merged)
+        return averaged
+
+    @staticmethod
+    def _pearson(xs, ys):
+        """Pearson correlation over paired, non-None samples; None if undefined."""
+        pairs = [
+            (x, y)
+            for x, y in zip(xs, ys)
+            if x is not None and y is not None
+        ]
+        n = len(pairs)
+        if n < 2:
+            return None
+        mean_x = sum(x for x, _ in pairs) / n
+        mean_y = sum(y for _, y in pairs) / n
+        cov = sum((x - mean_x) * (y - mean_y) for x, y in pairs)
+        var_x = sum((x - mean_x) ** 2 for x, _ in pairs)
+        var_y = sum((y - mean_y) ** 2 for _, y in pairs)
+        if var_x <= 0 or var_y <= 0:
+            return None
+        return cov / (var_x ** 0.5 * var_y ** 0.5)
+
+    def _report_selection_diagnostics(self, history, best_snapshot_epoch, metric_label):
+        """Print the honest val→test gap and val↔test correlation.
+
+        The "honest" gap compares validation and test AUC at the *same* restored
+        epoch, instead of the biased running-max-val vs final-test comparison.
+        A low correlation means validation is a poor selector for test — the
+        core reason test AUC sits near the ERM baseline regardless of changes.
+        """
+        val_curve = history.get("val_auc", []) or []
+        test_curve = history.get("test_auc", []) or []
+        if not test_curve:
+            return  # diagnostics only meaningful when a diagnostic_loader was used
+
+        corr = self._pearson(val_curve, test_curve)
+        corr_str = "n/a" if corr is None else f"{corr:.3f}"
+        print(
+            f"[selection diagnostics] per-epoch val↔test {metric_label} "
+            f"correlation = {corr_str} over {len(test_curve)} epoch(s)"
+        )
+
+        if best_snapshot_epoch is not None:
+            idx = best_snapshot_epoch - 1
+            val_at = val_curve[idx] if 0 <= idx < len(val_curve) else None
+            test_at = test_curve[idx] if 0 <= idx < len(test_curve) else None
+            if val_at is not None and test_at is not None:
+                print(
+                    f"[selection diagnostics] at restored epoch {best_snapshot_epoch}: "
+                    f"val {metric_label}={val_at:.4f}  test {metric_label}={test_at:.4f}  "
+                    f"honest gap={val_at - test_at:+.4f}"
+                )

@@ -1,5 +1,7 @@
 """SuGAREnsemble: inference-only ensemble over trained FragmentCIGA views."""
 
+import math
+
 import torch
 import torch.nn.functional as F
 
@@ -125,15 +127,24 @@ class SuGAREnsemble:
         if not views:
             raise ValueError("view_indices must contain at least one view")
 
-        all_probs = []
-        for _, method_views in self._views_by_fragmentation(views):
+        all_log_probs = []
+        # ERM views have no fragment scores to aggregate; each one classifies the
+        # full atom graph on its own.
+        erm_views = [view for view in views if getattr(view, "erm_baseline", False)]
+        subgraph_views = [view for view in views if not getattr(view, "erm_baseline", False)]
+        for view in erm_views:
+            all_log_probs.append(view(batch_data))
+
+        for _, method_views in self._views_by_fragmentation(subgraph_views):
             atom_batch, _ = self._aggregate_subgraph(batch_data, method_views, fast=True)
             for view in method_views:
                 logits = view.atom_classifier(atom_batch)
-                all_probs.append(F.softmax(logits, dim=-1))
+                all_log_probs.append(F.log_softmax(logits, dim=-1))
 
-        avg_probs = torch.stack(all_probs, dim=0).mean(dim=0)
-        return torch.log(avg_probs.clamp(min=1e-8))
+        # log of the mean probability, computed in log space so a confidently
+        # wrong view cannot underflow the average to the clamp floor.
+        stacked = torch.stack(all_log_probs, dim=0)
+        return torch.logsumexp(stacked, dim=0) - math.log(stacked.size(0))
 
     def get_invariant_subgraph(self, batch_data, view_idx=0):
         """Return the reconstructed atom subgraph from one view for analysis."""

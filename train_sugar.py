@@ -12,10 +12,12 @@ Training flow:
   3. Evaluate the ensemble on the test set.
 """
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 import argparse
 import json
+import random
 import yaml
 from pathlib import Path
 from copy import deepcopy
@@ -104,6 +106,7 @@ def build_shared_initialized_views(
 ):
     """Build FragmentCIGA views from one shared initial state."""
     num_views = config.num_views
+    erm_baseline = bool(config.get("erm_baseline", False))
     view_fragmentation_methods = expand_view_fragmentations(config)
     uses_default_fragmentation = not uses_mixed_fragmentations(config)
     shared_view = FragmentCIGA(
@@ -121,6 +124,7 @@ def build_shared_initialized_views(
         fragmentation_method=(
             None if uses_default_fragmentation else view_fragmentation_methods[0]
         ),
+        erm_baseline=erm_baseline,
     )
     shared_initial_state = deepcopy(shared_view.state_dict())
 
@@ -145,6 +149,7 @@ def build_shared_initialized_views(
             fragmentation_method=(
                 None if uses_default_fragmentation else view_fragmentation_methods[i]
             ),
+            erm_baseline=erm_baseline,
         )
         view.load_state_dict(shared_initial_state)
         views.append(view)
@@ -212,6 +217,8 @@ def build_trainer(config, views, device):
         track_roc_auc=config.track_roc_auc,
         loss_log_path=config.get("loss_log_path", "logs/sugar_training_losses.csv"),
         aggregation_mode=config.get("aggregation_mode", config.get("aggregation", "mean")),
+        selection_ma_window=config.get("selection_ma_window", 1),
+        selection_weight_avg=config.get("selection_weight_avg", False),
     )
 
 
@@ -234,6 +241,7 @@ def apply_checkpoint_defaults(config, checkpoint_payload):
         "fragment_sample_ratio",
         "sampler_seed",
         "aggregation_mode",
+        "erm_baseline",
     }
     for key, value in checkpoint_config(checkpoint_payload).items():
         if key in model_shape_keys or not hasattr(config, key):
@@ -290,7 +298,7 @@ def _evaluate_ensemble(ensemble, loader, device, track_roc_auc=True, view_indice
         num_batches += 1
 
         if compute_auc:
-            all_probs.append(torch.softmax(predictions, dim=-1).cpu())
+            all_probs.append(predictions.exp().cpu())
             all_labels_list.append(labels.cpu())
 
     avg_loss = total_loss / num_batches if num_batches else 0.0
@@ -350,6 +358,17 @@ def build_final_metrics_report(
         "aggregation_mode",
         "track_roc_auc",
         "greedy_model_selection",
+        "erm_baseline",
+        "edge_ratio",
+        "fragment_sample_ratio",
+        "epochs",
+        "batch_size",
+        "hidden_dim",
+        "gnn_layers",
+        "dropout",
+        "learning_rate",
+        "weight_decay",
+        "seed",
         "lambda_contrast",
         "lambda_diversity",
         "lambda_irm",
@@ -401,8 +420,26 @@ def write_final_metrics_report(
     return path
 
 
+def seed_everything(seed):
+    """Seed every RNG the training path draws from, including model init.
+
+    grid_search.py seeds these before calling run_training, but running
+    train_sugar.py / main.py directly used to leave model init and dropout
+    unseeded, so those runs were not reproducible at all.
+    """
+    if seed is None:
+        return
+    seed = int(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 def run_training(config, resume_from=None):
     """Train FragmentCIGA views and optionally resume from a checkpoint."""
+    seed_everything(config.get("seed"))
     checkpoint_payload = None
     if resume_from:
         checkpoint_payload = load_checkpoint(resume_from, map_location="cpu")
@@ -452,9 +489,16 @@ def run_training(config, resume_from=None):
         if restored_opts:
             print(f"  Restored optimizer state for {restored_opts} view(s)")
 
+    # Diagnostic-only per-epoch test-curve logging (test AUC alongside val AUC
+    # to expose the val/test decoupling). Never used for selection/early-stop.
+    log_test_curve = config.get("log_test_curve", False)
+    diagnostic_loader = test_loader if log_test_curve else None
+
     # Resolve IRM environment ids while metadata is still present, then strip
-    # the bulky non-tensor fields PyG should not collate during training.
-    trainer.prepare_irm_environments([train_loader, val_loader])
+    # the bulky non-tensor fields PyG should not collate during training. The
+    # diagnostic loader is included so its IRM env ids resolve from real
+    # domains rather than the post-strip random fallback.
+    trainer.prepare_irm_environments([train_loader, val_loader, diagnostic_loader])
     strip_non_tensor_batch_fields(dataloaders)
 
     if val_loader is None and validation_split is not None:
@@ -466,6 +510,7 @@ def run_training(config, resume_from=None):
         num_epochs=config.epochs,
         patience=config.patience,
         restore_best_weights=True,
+        diagnostic_loader=diagnostic_loader,
     )
 
     ensemble = SuGAREnsemble(
@@ -655,160 +700,6 @@ def main(args):
     result = run_training(config, resume_from=config.get("resume_from", None))
     return result["history"]
 
-    device_name = config.get("device", "cuda")
-    device = torch.device("cuda" if torch.cuda.is_available() and device_name == "cuda" else "cpu")
-    print(f"Using device: {device}")
-
-    print(f"Loading data from {config.processed_dir}...")
-    dataloaders = build_split_dataloaders(config.processed_dir, config)
-
-    train_split = config.get("train_split", "train")
-    validation_split = config.get("validation_split", config.get("valid_split", "valid"))
-    test_split = config.get("test_split", "test")
-
-    train_loader = dataloaders.get(train_split)
-    val_loader = dataloaders.get(validation_split)
-    test_loader = dataloaders.get(test_split)
-
-    if train_loader is None:
-        raise ValueError(f"No training data found for split {train_split!r} in {config.processed_dir}")
-
-    keys_to_remove = ["fragment_to_atoms", "smiles", "molecule_id", "metadata"]
-    for loader in dataloaders.values():
-        if loader is not None and hasattr(loader, "dataset"):
-            for data in loader.dataset:
-                for key in keys_to_remove:
-                    if hasattr(data, key):
-                        delattr(data, key)
-                    if key in data._store:
-                        del data._store[key]
-
-    # Infer feature dimensions from first batch
-    print("Building FragmentCIGA views...")
-    first_batch = next(iter(train_loader))
-    atom_feat_dim = first_batch.x.size(1)
-    fragment_feat_dim = (
-        first_batch.fragment_x_static.size(1)
-        if hasattr(first_batch, "fragment_x_static")
-        else atom_feat_dim
-    )
-    atom_edge_dim = first_batch.edge_attr.size(1)
-    fragment_edge_dim = first_batch.fragment_edge_attr.size(1)
-
-    print(f"  Atom feature dim:     {atom_feat_dim}")
-    print(f"  Fragment feature dim: {fragment_feat_dim}")
-    print(f"  Atom edge dim:        {atom_edge_dim}")
-    print(f"  Fragment edge dim:    {fragment_edge_dim}")
-
-    # Create one FragmentCIGA model per view. All views share the same initial
-    # weights, while their sampler seeds differ so training still sees different
-    # fragment-edge drops across views.
-    num_views = config.num_views
-    views = build_shared_initialized_views(
-        config,
-        atom_feat_dim,
-        fragment_feat_dim,
-        atom_edge_dim,
-        fragment_edge_dim,
-    )
-    print(f"  Created {num_views} FragmentCIGA view(s) with shared initialization")
-
-    # Build trainer
-    trainer = SuGARTrainer(
-        views,
-        device=device,
-        learning_rate=config.learning_rate,
-        weight_decay=config.weight_decay,
-        lambda_contrast=config.lambda_contrast,
-        lambda_diversity=config.lambda_diversity,
-        lambda_irm=config.lambda_irm,
-        num_envs=config.num_envs,
-        env_split_key=config.get("env_split_key", "domain_id"),
-        env_bucket_strategy=config.get("env_bucket_strategy", "value"),
-        contrast_temperature=config.contrast_temperature,
-        contrast_sampling=config.contrast_sampling,
-        track_roc_auc=config.track_roc_auc,
-        loss_log_path=config.get("loss_log_path", "logs/sugar_training_losses.csv"),
-    )
-
-    # Train — per-view best weights are tracked and restored automatically
-    if val_loader is None and validation_split is not None:
-        print(f"Validation split {validation_split!r} was not found; training without validation.")
-    print(f"Starting training on split {train_split!r}...")
-    history = trainer.train(
-        train_loader,
-        val_loader=val_loader,
-        num_epochs=config.epochs,
-        patience=config.patience,
-        restore_best_weights=True,
-    )
-
-    # Wrap trained views in the ensemble for inference
-    ensemble = SuGAREnsemble(
-        trainer.views,
-        aggregation_mode=config.get("aggregation_mode", config.get("aggregation", "mean")),
-    )
-
-    # Evaluate ensemble on test set
-    if test_loader is not None:
-        print(f"\nEvaluating ensemble on test split {test_split!r}...")
-        test_loss, test_acc, test_auc = _evaluate_ensemble(
-            ensemble, test_loader, device, track_roc_auc=config.track_roc_auc
-        )
-        auc_str = f" | {test_split} AUC: {test_auc:.4f}" if test_auc is not None else ""
-        print(f"{test_split} Loss: {test_loss:.4f} | {test_split} Accuracy: {test_acc:.4f}{auc_str}")
-
-    for split_name in config.get("report_splits", []) or []:
-        if split_name in {validation_split, test_split}:
-            continue
-        loader = dataloaders.get(split_name)
-        if loader is None:
-            print(f"Report split {split_name!r} was not found; skipping.")
-            continue
-        loss, acc, auc = _evaluate_ensemble(
-            ensemble, loader, device, track_roc_auc=config.track_roc_auc
-        )
-        auc_str = f" | {split_name} AUC: {auc:.4f}" if auc is not None else ""
-        print(f"{split_name} Loss: {loss:.4f} | {split_name} Accuracy: {acc:.4f}{auc_str}")
-
-    # Greedy view selection
-    if config.get("greedy_model_selection", False) and val_loader is not None:
-        print("\nRunning greedy view selection on validation set...")
-        selected_views = greedy_view_selection(
-            ensemble, val_loader, device, use_auc=trainer.track_roc_auc
-        )
-
-        if test_loader is not None:
-            print("\nEvaluating greedy-selected ensemble on test set...")
-            test_acc_greedy = _accuracy_on_loader(
-                ensemble, test_loader, device, view_indices=selected_views
-            )
-            print(
-                f"{test_split} Accuracy (greedy-selected views {selected_views}): "
-                f"{test_acc_greedy:.4f}"
-            )
-            if trainer.track_roc_auc:
-                test_auc_greedy = _auc_on_loader(
-                    ensemble, test_loader, device, view_indices=selected_views
-                )
-                if test_auc_greedy is not None:
-                    print(
-                        f"{test_split} AUC (greedy-selected views {selected_views}): "
-                        f"{test_auc_greedy:.4f}"
-                    )
-
-    # Save model — store each view's state dict keyed by view index
-    if config.save_model:
-        model_path = Path(config.save_model)
-        model_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            {i: v.state_dict() for i, v in enumerate(trainer.views)},
-            model_path,
-        )
-        print(f"Model saved to {model_path}")
-
-    return history
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train SuGAR ensemble for molecular property prediction")
@@ -827,6 +718,13 @@ if __name__ == "__main__":
     parser.add_argument("--gnn_layers", type=int, default=None)
     parser.add_argument("--hidden_dim", type=int, default=None)
     parser.add_argument("--edge_ratio", type=float, default=None)
+    parser.add_argument(
+        "--erm_baseline",
+        action="store_const",
+        const=True,
+        default=None,
+        help="ERM anchor: classify the full atom graph, no fragment selection or gating.",
+    )
     parser.add_argument("--num_views", type=int, default=None)
     parser.add_argument(
         "--aggregation_mode", type=str, default=None, choices=["mean", "max"]

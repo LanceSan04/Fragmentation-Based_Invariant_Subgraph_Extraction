@@ -70,11 +70,23 @@ def _molecule_record(full, agg):
         w = float(weights[c]) if weights is not None else 1.0
         selected_bonds.append([a, b, w])
 
+    # ``atom_to_fragment`` maps each original atom index to its fragment id, letting the
+    # renderer color each selected fragment separately instead of falling back to gray.
+    atom_to_fragment = getattr(full, "atom_to_fragment", None)
+    selected_atom_fragments = None
+    if isinstance(atom_to_fragment, torch.Tensor) and atom_to_fragment.numel() > 0:
+        atom_to_fragment = atom_to_fragment.reshape(-1).tolist()
+        selected_atom_fragments = [
+            int(atom_to_fragment[a]) if a < len(atom_to_fragment) else -1
+            for a in orig_atom
+        ]
+
     return {
         "smiles": _scalar(getattr(full, "smiles", None)),
         "molecule_id": _scalar(getattr(full, "molecule_id", None)),
         "label": _scalar(getattr(full, "y", None)),
         "selected_atoms": [int(a) for a in orig_atom],
+        "selected_atom_fragments": selected_atom_fragments,
         "selected_bonds": selected_bonds,
     }
 

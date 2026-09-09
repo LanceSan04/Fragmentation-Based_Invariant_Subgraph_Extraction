@@ -124,7 +124,7 @@ preprocess_version: "0.1.0"
 # Multiple positive-count methods:
 #   stores method-prefixed fragment graph fields for each positive method.
 view_fragmentations:
-  group_graph: 6
+  group_graph: 5
   brics: 0
   recap: 0
 
@@ -248,13 +248,15 @@ debug_molecule_details: false
 # not. `seed` controls deterministic DataLoader shuffling/worker seeds, not the
 # FragmentCIGA sampler seeds below.
 # batch_size accepted: positive integer. Practical range: 32-512, depending on
-# memory; 128 is a reasonable default.
+# memory. The DrugOOD train splits are small (assay 4540 molecules), so large
+# batches starve the run of optimizer steps: at 256 an epoch is ~18 steps.
+# SuGAr's DrugOOD runs use 32.
 # num_workers accepted: integer >= 0. Practical range on Windows: 0-4; use 0 if
 # multiprocessing/data loading behaves strangely.
 # pin_memory accepted: true | false. Most useful with CUDA.
 # drop_last accepted: true | false. Usually false for molecular datasets.
 # seed accepted: integer or empty/null.
-batch_size: 128
+batch_size: 64
 num_workers: 4
 pin_memory: true
 drop_last: false
@@ -286,9 +288,21 @@ follow_batch:
 num_classes: 2
 gnn_layers: 3
 hidden_dim: 128
-edge_ratio: 0.5
-num_views: 6
-dropout: 0.1
+edge_ratio: 0.3
+num_views: 5
+dropout: 0.3
+
+# ERM anchor. When true, every view skips fragment scoring, top-k selection and
+# the edge gate, and classifies the full atom graph instead: a plain GINE
+# baseline under this repo's own featurizer, splits and metric. This is the
+# reference the fragment pipeline must be priced against, because published ERM
+# numbers for DrugOOD EC50-Assay disagree by ~8 AUC points between papers
+# (SuGAr Table 2 reports 75.57; AdvMood Table I reports 67.87).
+# Use with num_views: 1 and all three lambdas at 0.0 — with no fragment scores
+# there is nothing for the diversity term to act on, and extra views would only
+# ensemble identical architectures.
+# erm_baseline accepted: true | false.
+erm_baseline: false
 
 # Training-time random fragment-edge sampler inside each FragmentCIGA view.
 # 1.0 keeps the full fragment graph. Values below 1.0 enable SuGAr-style
@@ -296,27 +310,53 @@ dropout: 0.1
 # full fragment graph. Each view gets sampler_seed + view_index so views start
 # from shared weights but see different stochastic edge drops.
 # fragment_sample_ratio accepted: float in (0, 1]. Practical range: 0.8-1.0;
-# 1.0 disables training-time fragment-edge dropping.
+# 1.0 disables training-time fragment-edge dropping. SuGAr's DrugOOD runs keep
+# 95% of edges; dropping much more than that leaves the classifier's BatchNorm
+# statistics fitted to smaller graphs than it sees at evaluation.
 # sampler_seed accepted: integer or empty/null.
-fragment_sample_ratio: 0.95
+fragment_sample_ratio: 0.9
 sampler_seed: 7
 
 # Optimizer and training loop settings.
 # `device: cuda` automatically falls back to CPU when CUDA is unavailable.
 # learning_rate accepted: positive float. Practical range: 1e-4 to 1e-3; try
 # 0.001, 0.0005, 0.0001.
-# weight_decay accepted: float >= 0. Practical range: 0 to 5e-4; try 0, 1e-5,
-# 5e-4.
-# epochs accepted: positive integer. Practical range: 1-5 for smoke, 20-100 for
-# real experiments.
+# weight_decay accepted: float >= 0. Practical range: 0 to 1e-3; SuGAr's DrugOOD
+# runs use 1e-4.
+# epochs accepted: positive integer. Practical range: 1-5 for smoke, 100-200 for
+# real experiments. 40 epochs at batch_size 256 is only ~710 optimizer steps on
+# the assay split and measurably undertrains: the same config scored 0.680 at 40
+# epochs and 0.719 at 100.
 # patience accepted: positive integer. Practical range: 5-30; should usually be
 # smaller than epochs.
 # device accepted: cuda | cpu. cuda falls back to cpu if unavailable.
 learning_rate: 0.001
-weight_decay: 0.0005
-epochs: 40
+weight_decay: 0.0001
+epochs: 100
 patience: 20
 device: cuda
+
+# Checkpoint-selection robustness.
+# The best epoch is chosen on a trailing moving average of the validation
+# selection metric (ensemble AUC), not the raw per-epoch value. The max of a
+# noisy validation-AUC curve is upward-biased and latches onto noise peaks that
+# do not transfer to the OOD test split (a different domain than ood_val), which
+# manufactures a large val>>test gap and noisy test AUC. Smoothing the selection
+# signal counteracts this and matches the grid-search objective (auc_ma_window).
+# selection_ma_window accepted: positive integer. 1 = raw single-best-epoch
+#   (legacy behavior); 5 aligns with the grid-search moving-average objective.
+# selection_weight_avg accepted: true | false. When true, restore an SWA-style
+#   average of the top selection_ma_window snapshots instead of a single one.
+selection_ma_window: 5
+selection_weight_avg: false
+
+# Diagnostic-only per-epoch test-curve logging. When true, the test split is
+# evaluated every epoch and its loss/acc/auc are logged next to validation in
+# the per-epoch CSV, plus a val<->test correlation and honest val->test gap are
+# printed at the end. This is NEVER used for selection or early stopping (that
+# would be test-set peeking); it exists purely to expose the val/test decoupling.
+# log_test_curve accepted: true | false. Keep false for real runs.
+log_test_curve: false
 
 # The checkpoint, per-epoch loss CSV, and final evaluation metrics JSON are
 # always placed in the consolidated output_root run directory when their
@@ -342,15 +382,16 @@ device: cuda
 subgraph_analysis_dir:
 subgraph_split: ood_test
 subgraph_num_samples:
-subgraph_num_visualize: 10
+subgraph_num_visualize: 3
 subgraph_metric_min_available: 10
 subgraph_metric_top_k: 25
 
 # Auxiliary loss settings.
-# Prediction-only baseline is active below: contrastive, diversity, and IRM
-# weights are all zero. This is the clean control run for comparing whether
-# SuGAr-style auxiliary objectives actually improve OOD validation/test AUC.
-# Re-enable auxiliary losses in a separate run after this baseline is recorded.
+# NOTE: the values below are NOT a prediction-only baseline — diversity and IRM
+# are active. For the clean control run set all three lambdas to 0.0.
+#
+# Per-view terms (prediction, IRM) are SUMMED over views, matching SuGAr. A
+# lambda here is therefore the weight of the summed term, not a per-view weight.
 #
 # IRM only makes sense when a run has meaningful environment partitions. It is
 # applied only when lambda_irm > 0.0 and num_envs > 1.
@@ -376,10 +417,10 @@ subgraph_metric_top_k: 25
 # span a size gradient. Accepted: value | size.
 # contrast_temperature accepted: positive float. Practical range: 0.1-1.0.
 # contrast_sampling accepted: mul | var | cnc.
-lambda_contrast: 0.1
-lambda_diversity: 4.0
-lambda_irm: 4.0
-num_envs: 4
+lambda_contrast: 0.0
+lambda_diversity: 0.5
+lambda_irm: 2.0
+num_envs: 2
 env_split_key: domain_id
 env_bucket_strategy: value
 contrast_temperature: 0.1

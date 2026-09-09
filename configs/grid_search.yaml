@@ -37,23 +37,32 @@ output_dir: final_testing_outputs
 # start a fresh study, e.g. after editing the `grid` search space.
 study_name: parameter_search
 n_trials: 100                   # number of Optuna trials (parameter combinations)
-search_repeats: 3              # runs per trial (val metric averaged if >1)
+# Runs per trial (val metric averaged if >1). Seed-to-seed spread on this
+# benchmark is ~0.02 AUC, so 1-2 repeats cannot separate nearby configs; the
+# archived assay study used 3.
+search_repeats: 3
 sampler_seed: 7                # Optuna TPE sampler seed (reproducible study)
 base_seed: 1                   # training run r uses training seed base_seed + r
 auc_ma_window: 5               # window (epochs) for the best moving-average
 
 # eval mode
 eval_runs: 5                   # times to run the chosen config on the test split
+# Eval run r uses eval_base_seed + r. Kept clear of the search seeds
+# (base_seed + trial * search_repeats + r) so the final runs are not re-runs of
+# the trials that chose the config.
+eval_base_seed: 1000
 
 # Params JSON eval reads the chosen config from. Leave empty to use the search
 # output {output_dir}/search/best_params.json. The CLI --params flag overrides
 # this. Relative paths are resolved from the directory you run the command in.
 params_path:
 
-# Fixed overrides applied to every run (search and eval). Keep runs light; the
-# script already suppresses checkpoints/manifests/diagnostics regardless.
+# Fixed overrides applied to every run (search and eval). These win over the
+# overrides recorded inside best_params.json; a conflict is printed at startup.
+# Keep runs light; the script already suppresses
+# checkpoints/manifests/diagnostics regardless.
 overrides:
-  epochs: 40
+  epochs: 100
 
 # The search space. Each key -> a list of candidate values; Optuna samples one
 # value per key per trial (trial.suggest_categorical). Unlike an exhaustive grid,
@@ -61,11 +70,13 @@ overrides:
 # these lists without paying for the full Cartesian product.
 grid:
   lambda_contrast: [0.0, 0.1, 0.5, 1.0]
-  lambda_diversity: [0.0, 2.0, 4.0, 8.0, 16.0]
+  lambda_diversity: [0.0, 0.5, 1.0, 2.0, 4.0]
   lambda_irm: [0.0, 1.0, 2.0, 4.0, 8.0]
   num_envs: [2, 4, 8]
-  learning_rate: [0.001, 0.0005]
   edge_ratio: [0.3, 0.4, 0.5, 0.6]
   weight_decay: [0.0001, 0.001, 0.01]
-  dropout: [0.1, 0.2, 0.3]
+  dropout: [0.1, 0.2, 0.3, 0.4]
+  gnn_layers: [2, 3]
+  hidden_dim: [64, 128, 256]
+  batch_size: [64, 128, 256]
   

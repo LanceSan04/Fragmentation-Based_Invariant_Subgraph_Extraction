@@ -75,6 +75,7 @@ Example reusing a training config for both paths:
 import argparse
 import csv
 import io
+import math
 import sys
 from collections import Counter
 from pathlib import Path
@@ -751,6 +752,418 @@ def write_fragment_interpretation_tables(
     return paths
 
 
+# Source-metric identity columns that define a fragment / fragment-pair. In the
+# consolidated contrast table both kinds are normalized to the fragment_a_*/fragment_b_*
+# columns; a single fragment leaves the fragment_b_* columns blank.
+_CONTRAST_IDENTITY = {
+    "fragment": ["fragment_type", "fragment_smiles"],
+    "pair": [
+        "fragment_a_type",
+        "fragment_a_smiles",
+        "fragment_b_type",
+        "fragment_b_smiles",
+    ],
+}
+
+# Stable column order for the consolidated label-contrast table (so an empty table
+# still gets headers).
+_CONTRAST_FIELDNAMES = [
+    "fragmentation_method",
+    "kind",
+    "selection_source",
+    "fragment_a_type",
+    "fragment_a_smiles",
+    "fragment_b_type",
+    "fragment_b_smiles",
+    "neg_label",
+    "pos_label",
+    "available_neg",
+    "available_pos",
+    "selected_neg",
+    "selected_pos",
+    "selection_rate_neg",
+    "selection_rate_pos",
+    "rate_difference",
+    "selection_log_odds",
+    "min_support",
+]
+
+
+def resolve_binary_labels(records):
+    """Return the two distinct (non-unknown) labels as (neg, pos), else None.
+
+    The label contrast only makes sense for binary classification, so a split with one
+    class or more than two is skipped by the caller.
+    """
+    labels = sorted(
+        {
+            str(record["row"].get("label", "unknown"))
+            for record in records
+            if str(record["row"].get("label", "unknown")) != "unknown"
+        }
+    )
+    if len(labels) != 2:
+        return None
+    return labels[0], labels[1]
+
+
+def _smoothed_logit(selected, available):
+    """Laplace-smoothed logit of a selection rate; stable at rate 0 or 1."""
+    rate = (float(selected) + 0.5) / (float(available) + 1.0)
+    return math.log(rate / (1.0 - rate))
+
+
+def _contrast_identity_columns(kind, identity_values):
+    """Normalize a group key's identity into unified fragment_a_*/fragment_b_* columns."""
+    if kind == "fragment":
+        fragment_type, fragment_smiles = identity_values
+        return {
+            "fragment_a_type": fragment_type,
+            "fragment_a_smiles": fragment_smiles,
+            "fragment_b_type": "",
+            "fragment_b_smiles": "",
+        }
+    return dict(zip(_CONTRAST_IDENTITY["pair"], identity_values))
+
+
+def build_label_contrast_rows(metric_rows, kind, neg_label, pos_label, min_available):
+    """Pivot per-label selection metrics into one contrast row per fragment/pair.
+
+    Each row pairs the negative- and positive-label selection behavior for a single
+    ``(fragmentation_method, selection_source, fragment signature)`` and reports the
+    difference in selection rate. That rate is conditional on the fragment being present
+    in the molecule, so the difference reflects the model *choosing* the fragment more
+    for one class rather than the class simply containing it more often. Only signatures
+    with ``available_count >= min_available`` in *both* labels are kept, and rows are
+    returned sorted by descending absolute rate difference.
+    """
+    identity = _CONTRAST_IDENTITY[kind]
+    grouped = {}
+    for row in metric_rows:
+        key = (
+            row.get("fragmentation_method", "default"),
+            row["selection_source"],
+            *(row[field] for field in identity),
+        )
+        grouped.setdefault(key, {})[str(row["label"])] = row
+
+    contrast_rows = []
+    for key in sorted(grouped):
+        by_label = grouped[key]
+        neg_row = by_label.get(neg_label)
+        pos_row = by_label.get(pos_label)
+        if neg_row is None or pos_row is None:
+            continue
+        available_neg = _metric_int(neg_row, "available_count")
+        available_pos = _metric_int(pos_row, "available_count")
+        if available_neg < min_available or available_pos < min_available:
+            continue
+
+        selected_neg = _metric_int(neg_row, "selected_count")
+        selected_pos = _metric_int(pos_row, "selected_count")
+        rate_neg = _metric_value(neg_row, "selection_rate")
+        rate_pos = _metric_value(pos_row, "selection_rate")
+
+        contrast_rows.append(
+            {
+                "fragmentation_method": key[0],
+                "kind": kind,
+                "selection_source": key[1],
+                **_contrast_identity_columns(kind, key[2:]),
+                "neg_label": neg_label,
+                "pos_label": pos_label,
+                "available_neg": available_neg,
+                "available_pos": available_pos,
+                "selected_neg": selected_neg,
+                "selected_pos": selected_pos,
+                "selection_rate_neg": round(rate_neg, 6),
+                "selection_rate_pos": round(rate_pos, 6),
+                "rate_difference": round(rate_pos - rate_neg, 6),
+                "selection_log_odds": round(
+                    _smoothed_logit(selected_pos, available_pos)
+                    - _smoothed_logit(selected_neg, available_neg),
+                    6,
+                ),
+                "min_support": min(available_neg, available_pos),
+            }
+        )
+
+    contrast_rows.sort(key=lambda row: -abs(row["rate_difference"]))
+    return contrast_rows
+
+
+def write_label_contrast_table(
+    fragment_rows,
+    edge_rows,
+    output_dir,
+    neg_label,
+    pos_label,
+    min_available=10,
+):
+    """Write one consolidated label-contrast CSV for fragments and fragment-pairs.
+
+    Fragments and pairs share the fragment_a_*/fragment_b_* schema and are told apart by
+    the ``kind`` column, grouped by fragmentation method then kind, sorted within each by
+    descending absolute rate difference (strongest label-discriminative rows first).
+    """
+    contrast_frag = build_label_contrast_rows(
+        fragment_rows, "fragment", neg_label, pos_label, min_available
+    )
+    contrast_pair = build_label_contrast_rows(
+        edge_rows, "pair", neg_label, pos_label, min_available
+    )
+    combined = contrast_frag + contrast_pair
+    combined.sort(
+        key=lambda row: (
+            row["fragmentation_method"],
+            row["kind"],
+            -abs(row["rate_difference"]),
+        )
+    )
+    path = write_csv_rows(output_dir / "label_contrast.csv", combined, _CONTRAST_FIELDNAMES)
+    print(f"Wrote label-contrast table: {path} (neg_label={neg_label}, pos_label={pos_label})")
+    return contrast_frag, contrast_pair
+
+
+def _contrast_methods(contrast_rows):
+    """Fragmentation methods present in a set of contrast rows."""
+    return sorted({row["fragmentation_method"] for row in contrast_rows})
+
+
+def _rows_for_method(contrast_rows, method):
+    return [row for row in contrast_rows if row["fragmentation_method"] == method]
+
+
+def _aggregated_only(contrast_rows):
+    """Contrast rows from the shared aggregated subgraph (the model's decision path)."""
+    return [row for row in contrast_rows if row["selection_source"] == "aggregated"]
+
+
+def _view_sources(contrast_rows):
+    """View source names present in these rows, ordered by view index.
+
+    Views are method-scoped: a fragmentation method only owns the views assigned to it,
+    so the columns are read off the rows rather than assumed to be range(num_views).
+    """
+    sources = {
+        row["selection_source"]
+        for row in contrast_rows
+        if row["selection_source"].startswith("view_")
+        and row["selection_source"].split("_", 1)[1].isdigit()
+    }
+    return sorted(sources, key=lambda source: int(source.split("_", 1)[1]))
+
+
+def _contrast_signature_key(row, kind):
+    """Identity tuple for a contrast row, used to match a fragment across sources."""
+    if kind == "fragment":
+        return (row["fragment_a_type"], row["fragment_a_smiles"])
+    return (
+        row["fragment_a_type"],
+        row["fragment_a_smiles"],
+        row["fragment_b_type"],
+        row["fragment_b_smiles"],
+    )
+
+
+def _contrast_row_label(row, kind):
+    """Short display label for a contrast row (fragment SMILES or pair 'A—B')."""
+    if kind == "fragment":
+        return str(row.get("fragment_a_smiles", ""))
+    return f"{row.get('fragment_a_smiles', '')}—{row.get('fragment_b_smiles', '')}"
+
+
+def _top_aggregated_rows(contrast_rows, top_n):
+    """Aggregated-source rows sorted by descending absolute rate difference (top-N)."""
+    rows = sorted(
+        _aggregated_only(contrast_rows), key=lambda row: -abs(row["rate_difference"])
+    )
+    return rows[:top_n]
+
+
+def plot_label_dumbbell(
+    contrast_rows, output_dir, filename, kind, neg_label, pos_label, method, top_n=20
+):
+    """Dumbbell chart: each fragment/pair as its two per-label selection rates joined.
+
+    One row per top-discriminative fragment; a dot at each label's selection rate joined
+    by a line, so the absolute selection levels and the gap between them both read at a
+    glance. ``contrast_rows`` must already be scoped to a single fragmentation method.
+    """
+    rows = _top_aggregated_rows(contrast_rows, top_n)
+    if not rows:
+        print(f"  No aggregated contrast rows; skipping {filename}.")
+        return
+    rows.sort(key=lambda row: row["rate_difference"])  # largest positive gap ends up on top
+    display_labels = [_contrast_row_label(row, kind) for row in rows]
+    neg_vals = [row["selection_rate_neg"] for row in rows]
+    pos_vals = [row["selection_rate_pos"] for row in rows]
+    positions = list(range(len(rows)))
+
+    fig, ax = plt.subplots(figsize=(8, max(3.0, 0.4 * len(rows) + 1.0)))
+    for position, neg_val, pos_val in zip(positions, neg_vals, pos_vals):
+        ax.plot(
+            [neg_val, pos_val], [position, position], color="#c7cbd1", linewidth=2.0, zorder=1
+        )
+    ax.scatter(neg_vals, positions, s=60, color="#d62728", label=f"label {neg_label}", zorder=2)
+    ax.scatter(pos_vals, positions, s=60, color="#1f77b4", label=f"label {pos_label}", zorder=2)
+    ax.set_yticks(positions)
+    ax.set_yticklabels(display_labels, fontsize=7)
+    ax.set_xlim(-0.02, 1.02)
+    ax.set_xlabel("selection rate (aggregated subgraph)")
+    ax.set_title(f"Top label-discriminative {kind}s by selection rate\nmethod: {method}")
+    ax.legend(loc="lower right", fontsize=8)
+    ax.grid(axis="x", color="#e8eaed", linewidth=0.8)
+    ax.set_axisbelow(True)
+    fig.tight_layout()
+    path = output_dir / filename
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"Wrote {path}")
+
+
+def _perview_panel_data(contrast_rows, kind, top_n):
+    """Compute (view_sources, display_labels, matrix) for one kind's per-view heatmap panel."""
+    top_rows = _top_aggregated_rows(contrast_rows, top_n)
+    view_sources = _view_sources(contrast_rows)
+    if not top_rows or not view_sources:
+        return None
+
+    per_view_diff = {}
+    for row in contrast_rows:
+        if row["selection_source"] in view_sources:
+            key = _contrast_signature_key(row, kind)
+            per_view_diff.setdefault(key, {})[row["selection_source"]] = row["rate_difference"]
+
+    display_labels = [_contrast_row_label(row, kind) for row in top_rows]
+    matrix = np.array(
+        [
+            [
+                per_view_diff.get(_contrast_signature_key(row, kind), {}).get(source, np.nan)
+                for source in view_sources
+            ]
+            for row in top_rows
+        ],
+        dtype=float,
+    )
+    return view_sources, display_labels, matrix
+
+
+def plot_perview_consistency(
+    contrast_frag_rows, contrast_pair_rows, output_dir, filename, neg_label, pos_label, method,
+    top_n=18,
+):
+    """Combined fragment + pair heatmap of each view's own label rate-difference.
+
+    Rows are the top-discriminative fragments/pairs (ranked by the aggregated rate
+    difference); columns are the views belonging to this fragmentation method. When every
+    column agrees in sign, each independently-trained view learned the same label
+    association, which is evidence of a real pattern rather than a single-view artifact.
+    The fragment and pair panels share one title and one colorbar (rate-difference axis).
+    ``contrast_frag_rows``/``contrast_pair_rows`` must already be scoped to a single
+    fragmentation method.
+    """
+    panels = []
+    for kind, rows in (("fragment", contrast_frag_rows), ("pair", contrast_pair_rows)):
+        data = _perview_panel_data(rows, kind, top_n)
+        if data is not None:
+            panels.append((kind, *data))
+    if not panels:
+        print(f"  No per-view contrast rows; skipping {filename}.")
+        return
+
+    finite = np.concatenate([m[np.isfinite(m)] for _, _, _, m in panels])
+    vmax = float(np.max(np.abs(finite))) if finite.size else 1.0
+    vmax = vmax or 1.0
+    cmap = plt.get_cmap("RdBu_r").copy()
+    cmap.set_bad("#e8eaed")
+
+    n_rows_max = max(len(labels) for _, _, labels, _ in panels)
+    fig, axes = plt.subplots(
+        1, len(panels),
+        figsize=(
+            sum(max(4.5, 0.9 * len(vs) + 3.5) for _, vs, _, _ in panels),
+            max(4.0, 0.55 * n_rows_max + 1.5),
+        ),
+        constrained_layout=True,
+    )
+    fig.set_constrained_layout_pads(h_pad=0.12)
+    axes = [axes] if len(panels) == 1 else list(axes)
+
+    im = None
+    for ax, (kind, view_sources, display_labels, matrix) in zip(axes, panels):
+        im = ax.imshow(matrix, cmap=cmap, vmin=-vmax, vmax=vmax, aspect="auto")
+        ax.set_xticks(range(len(view_sources)))
+        ax.set_xticklabels(
+            [source.replace("view_", "V") for source in view_sources],
+            fontsize=17, fontweight="bold",
+        )
+        ax.set_yticks(range(len(display_labels)))
+        ax.set_yticklabels(display_labels, fontsize=15)
+        ax.set_title(f"{kind.capitalize()}s", fontsize=24, fontweight="bold", pad=10)
+
+    fig.suptitle(
+        f"Per-view label selection-rate difference\n"
+        f"Red favors label {pos_label}; Blue favors label {neg_label}",
+        fontsize=32, fontweight="bold",
+    )
+    cbar = fig.colorbar(im, ax=axes, shrink=0.85)
+    cbar.set_label(
+        f"rate difference (label {pos_label} − label {neg_label})",
+        fontsize=18, fontweight="bold",
+    )
+    cbar.ax.tick_params(labelsize=14)
+    path = output_dir / filename
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"Wrote {path}")
+
+
+def run_label_contrast_analysis(records, fragment_rows, edge_rows, output_dir, min_available):
+    """Build the consolidated label-contrast table and per-method plots when binary."""
+    labels = resolve_binary_labels(records)
+    if labels is None:
+        print("Skipping label-contrast analysis (need exactly two label classes).")
+        return None
+    neg_label, pos_label = labels
+    contrast_frag, contrast_pair = write_label_contrast_table(
+        fragment_rows,
+        edge_rows,
+        output_dir,
+        neg_label,
+        pos_label,
+        min_available=min_available,
+    )
+
+    for kind, contrast_rows in (("fragment", contrast_frag), ("pair", contrast_pair)):
+        for method in _contrast_methods(contrast_rows):
+            method_rows = _rows_for_method(contrast_rows, method)
+            suffix = _safe_filename(method)
+            plot_label_dumbbell(
+                method_rows,
+                output_dir,
+                f"label_dumbbell_{kind}s_{suffix}.png",
+                kind,
+                neg_label,
+                pos_label,
+                method,
+            )
+
+    all_methods = sorted(set(_contrast_methods(contrast_frag)) | set(_contrast_methods(contrast_pair)))
+    for method in all_methods:
+        suffix = _safe_filename(method)
+        plot_perview_consistency(
+            _rows_for_method(contrast_frag, method),
+            _rows_for_method(contrast_pair, method),
+            output_dir,
+            f"label_perview_{suffix}.png",
+            neg_label,
+            pos_label,
+            method,
+        )
+    return contrast_frag, contrast_pair
+
+
 def print_summary(records):
     """Print mean/median/min/max/stdev of the inter-view agreement metric."""
     if not records:
@@ -1235,6 +1648,13 @@ def run_subgraph_analysis(
         output_dir,
         min_available=options["metric_min_available"],
         top_k=options["metric_top_k"],
+    )
+    run_label_contrast_analysis(
+        records,
+        fragment_rows,
+        edge_rows,
+        output_dir,
+        min_available=options["metric_min_available"],
     )
     plot_agreement_heatmap(records, output_dir, num_views)
     visualize_molecules(records, output_dir, options["num_visualize"])

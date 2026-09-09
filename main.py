@@ -91,6 +91,7 @@ COMMON_OVERRIDES = (
     "gnn_layers",
     "batch_size",
     "edge_ratio",
+    "erm_baseline",
     "learning_rate",
     "weight_decay",
     "lambda_contrast",
@@ -454,6 +455,13 @@ def add_common_arguments(parser):
     parser.add_argument("--gnn-layers", dest="gnn_layers", type=int)
     parser.add_argument("--batch-size", dest="batch_size", type=int)
     parser.add_argument("--edge-ratio", dest="edge_ratio", type=float)
+    parser.add_argument(
+        "--erm-baseline",
+        dest="erm_baseline",
+        action="store_const",
+        const=True,
+        help="ERM anchor: classify the full atom graph, no fragment selection or gating.",
+    )
     parser.add_argument("--learning-rate", dest="learning_rate", type=float)
     parser.add_argument("--weight-decay", dest="weight_decay", type=float)
     parser.add_argument("--lambda-contrast", dest="lambda_contrast", type=float)

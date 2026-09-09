@@ -1,3 +1,0 @@
-metric_table,min_available,total_rows,kept_rows,dropped_low_support_rows
-fragment_selection_metrics,10,1960,784,1176
-fragment_pair_selection_metrics,10,7063,1841,5222

@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch_geometric.data import Data
 from torch_geometric.explain.algorithm.utils import set_masks, clear_masks
 
 from src.models.fragment_masker import FragmentMasker, segment_topk_mask
@@ -114,10 +115,17 @@ class FragmentCIGA(nn.Module):
         fragment_sample_ratio=1.0,
         sampler_seed=None,
         fragmentation_method=None,
+        erm_baseline=False,
     ):
         super().__init__()
         if fragment_feature_dim is None:
             raise ValueError("fragment_feature_dim must be provided")
+
+        # ERM anchor: classify the whole atom graph, with no fragment scoring,
+        # no selection and no edge gate. This is the reference the fragment
+        # pipeline has to be priced against, since published ERM numbers for
+        # DrugOOD EC50-Assay disagree by ~8 AUC points across papers.
+        self.erm_baseline = erm_baseline
 
         self.fragment_edge_sampler = FragmentEdgeSampler(
             keep_ratio=fragment_sample_ratio,
@@ -141,6 +149,34 @@ class FragmentCIGA(nn.Module):
             edge_dim=atom_edge_dim,
         )
 
+    def _forward_erm(self, batch_data, return_intermediates=False):
+        """ERM anchor: classify the full atom graph, ungated.
+
+        No fragment graph is built, the masker is never called, and no edge mask
+        is set, so the classifier sees every bond at weight 1.0. Auxiliary losses
+        that need fragment scores are reported as absent (``fragment_scores`` is
+        None) and the trainer skips the diversity term for such views.
+        """
+        atom_batch = Data(
+            x=batch_data.x,
+            edge_index=batch_data.bond_index,
+            edge_attr=batch_data.bond_attr,
+            batch=batch_data.batch,
+        )
+        logits, h_graph = self.atom_classifier(atom_batch, return_embeddings=True)
+        predictions = F.log_softmax(logits, dim=-1)
+
+        if return_intermediates:
+            return predictions, {
+                "embeddings": h_graph,
+                "fragment_scores": None,
+                "fragment_edge_batch": None,
+                "fragment_edge_eligible": None,
+                "fragmentation_method": self.fragmentation_method,
+                "logits": logits,
+            }
+        return predictions
+
     def forward(self, batch_data, return_intermediates=False, fragment_batch=None):
         """Per-view forward pass: mask → reconstruct → classify.
 
@@ -159,6 +195,10 @@ class FragmentCIGA(nn.Module):
                 'embeddings', 'fragment_scores', 'logits'
         """
         device = batch_data.x.device
+
+        if self.erm_baseline:
+            return self._forward_erm(batch_data, return_intermediates)
+
         if fragment_batch is None:
             fragment_batch = build_fragment_graph_batch(
                 batch_data,
@@ -191,7 +231,7 @@ class FragmentCIGA(nn.Module):
         )
 
         logits, h_graph = self.atom_classifier(atom_batch, return_embeddings=True)
-        predictions = torch.log(F.softmax(logits, dim=-1).clamp(min=1e-8))
+        predictions = F.log_softmax(logits, dim=-1)
 
         if return_intermediates:
             return predictions, {

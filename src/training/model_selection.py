@@ -56,7 +56,8 @@ def _auc_on_loader(model, loader, device, view_indices=None):
         if labels.dim() == 2:
             labels = labels.squeeze(-1)
         labels = labels.long()
-        probs = torch.softmax(predictions, dim=-1)
+        # The ensemble returns log-probabilities, not logits.
+        probs = predictions.exp()
         all_probs.append(probs.cpu())
         all_labels.append(labels.cpu())
     all_probs = torch.cat(all_probs, dim=0).numpy()

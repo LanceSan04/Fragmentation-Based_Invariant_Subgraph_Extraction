@@ -72,10 +72,18 @@ def load_spec(path):
 
 
 def set_all_seeds(seed):
-    """Seed every RNG the training path draws from (model init is not seeded)."""
+    """Seed every RNG the training path draws from, model init included.
+
+    run_training seeds these again from config.seed; both are kept so a run is
+    reproducible whether it is launched from here or from train_sugar.py.
+    Note that CUDA scatter reductions stay nondeterministic, so runs are
+    repeatable in distribution but not bit-identical.
+    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def build_run_dict(base, overrides, combo, seed, run_name):
@@ -372,23 +380,41 @@ def run_eval(spec, base, args):
     best = json.loads(params_path.read_text(encoding="utf-8"))
     combo = best.get("params", {}) or {}
 
-    # Prefer the overrides captured at search time so eval matches selection;
-    # CLI --epochs/--device win over both the spec and the captured overrides.
-    overrides = dict(spec.get("overrides", {}) or {})
-    overrides.update(best.get("overrides", {}) or {})
+    # Precedence: CLI > this spec's overrides > the overrides captured at search
+    # time. The captured ones are only a fallback. Letting them win silently is
+    # what forced `epochs: 100` back down to the search budget of 40 in every
+    # archived eval, so a conflict is now reported rather than applied quietly.
+    overrides = dict(best.get("overrides", {}) or {})
+    spec_overrides = dict(spec.get("overrides", {}) or {})
+    for key, value in spec_overrides.items():
+        if key in overrides and overrides[key] != value:
+            print(
+                f"  override '{key}': using {value} from the spec "
+                f"(search-time value was {overrides[key]})"
+            )
+    overrides.update(spec_overrides)
     if args.epochs is not None:
         overrides["epochs"] = args.epochs
     if args.device is not None:
         overrides["device"] = args.device
 
     runs = args.runs if args.runs is not None else int(spec.get("eval_runs", 5))
-    base_seed = int(spec.get("base_seed", 7))
+    # Offset from the search seeds by default: search uses
+    # base_seed + trial * repeats + r, so reusing base_seed here would make the
+    # first eval runs literal re-runs of the earliest search trials.
+    base_seed = int(spec.get("eval_base_seed", spec.get("base_seed", 7)))
     test_split = spec.get("test_split", "ood_test")
+    validation_split = base.get("validation_split", base.get("valid_split"))
     report_splits = [
         split for split in (base.get("report_splits", []) or [])
         if split != test_split
     ]
-    eval_splits = [test_split] + report_splits
+    # Report the split selection was made on as well, so the val -> test gap is
+    # recorded for the final runs instead of only living in the search leaderboard.
+    eval_splits = [test_split]
+    for split in [validation_split, *report_splits]:
+        if split and split not in eval_splits:
+            eval_splits.append(split)
 
     out_dir = out_root / "eval"
     runs_dir = out_dir / "runs"

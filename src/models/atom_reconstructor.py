@@ -193,12 +193,32 @@ def reconstruct_atom_graph(
             device=selected_atoms.device,
         )
 
+    # Internal bonds are gated by their fragment's soft importance, matching
+    # reconstruct_batch_fast — the path training and evaluation actually use.
+    internal_bond_weights = None
+    if selected_fragment_edge_weight is not None and internal_bond_indices.numel():
+        edge_scores_full = torch.as_tensor(
+            selected_fragment_edge_weight,
+            dtype=molecule_data.x.dtype,
+            device=selected_atoms.device,
+        )
+        frag_importance = fragment_soft_importance(
+            fragment_x_static.size(0),
+            fragment_edge_index,
+            edge_scores_full,
+        )
+        internal_bond_weights = frag_importance[
+            atom_to_fragment[molecule_data.bond_index[0, internal_bond_indices]]
+        ]
+
     reconstructed_bond_weight = build_reconstructed_bond_weight(
         selected_unique_bonds,
         selected_bond_indices,
         selected_edge_weights,
         dtype=molecule_data.x.dtype,
         device=selected_atoms.device,
+        internal_bond_indices=internal_bond_indices,
+        internal_bond_weights=internal_bond_weights,
     )
 
     relabeled_edge_index, relabeled_atom_ids = relabel_reconstructed_atoms(
@@ -311,17 +331,61 @@ def validate_selected_fragment_provenance(
             raise ValueError("selected fragment edge references an atom outside the molecule")
 
 
+def fragment_soft_importance(num_fragments, fragment_edge_index, edge_scores_full):
+    """Per-fragment soft importance = MAX incident fragment-edge score.
+
+    Max rather than mean, so training-time sampler-dropped edges — which carry
+    score 0 in the restored score vector — do not dilute a fragment's
+    importance. Fragments with no incident edge keep weight 1.0.
+
+    Shared by :func:`reconstruct_atom_graph` and :func:`reconstruct_batch_fast`
+    so both gate internal bonds identically.
+    """
+    importance = edge_scores_full.new_ones(num_fragments)
+    if fragment_edge_index.numel() == 0:
+        return importance
+    endpoints = fragment_edge_index.reshape(-1).to(edge_scores_full.device)
+    incident_max = edge_scores_full.new_zeros(num_fragments).scatter_reduce(
+        0, endpoints, edge_scores_full.repeat(2), reduce="amax", include_self=False
+    )
+    has_edge = torch.zeros(num_fragments, dtype=torch.bool, device=edge_scores_full.device)
+    has_edge[endpoints] = True
+    return torch.where(has_edge, incident_max, importance)
+
+
 def build_reconstructed_bond_weight(
     selected_unique_bonds,
     selected_bond_indices,
     selected_edge_weights,
     dtype,
     device,
+    internal_bond_indices=None,
+    internal_bond_weights=None,
 ):
-    """Assign selected fragment-edge scores to reconstructed boundary bonds."""
+    """Assign the soft gate to every reconstructed bond.
+
+    Boundary bonds (those named by a selected fragment edge) take their own
+    fragment-edge score; internal bonds take their fragment's soft importance
+    when ``internal_bond_weights`` is supplied, and 1.0 otherwise. The two bond
+    sets are disjoint — internal bonds stay within one fragment, boundary bonds
+    cross fragments — so assignment order does not matter.
+    """
     selected_unique_bonds = torch.as_tensor(selected_unique_bonds, dtype=torch.long, device=device)
     weights = torch.ones((selected_unique_bonds.numel(),), dtype=dtype, device=device)
-    if selected_unique_bonds.numel() == 0 or selected_bond_indices.numel() == 0:
+    if selected_unique_bonds.numel() == 0:
+        return weights
+
+    if internal_bond_weights is not None and internal_bond_indices is not None:
+        internal_bond_indices = torch.as_tensor(
+            internal_bond_indices, dtype=torch.long, device=device
+        )
+        if internal_bond_indices.numel():
+            internal_positions = torch.searchsorted(selected_unique_bonds, internal_bond_indices)
+            weights[internal_positions] = torch.as_tensor(
+                internal_bond_weights, dtype=dtype, device=device
+            )
+
+    if selected_bond_indices.numel() == 0:
         return weights
 
     selected_bond_indices = torch.as_tensor(selected_bond_indices, dtype=torch.long, device=device)
@@ -335,7 +399,6 @@ def build_reconstructed_bond_weight(
         raise ValueError("selected fragment edge references a bond missing from reconstruction")
     # Raw fragment-edge score (in [0, 1]) so a low score suppresses the boundary
     # bond's messages toward zero when used as a classifier edge-mask gate.
-    # Internal bonds keep weight 1.0 (intra-fragment structure stays connected).
     weights[positions] = selected_edge_weights
     return weights
 
@@ -409,10 +472,11 @@ def reconstruct_batch_fast(
     The classifier (GINE + mean pool) is order-invariant over edges, so edges
     are emitted in a different order than :func:`reconstruct_batch`, but ``x`` and
     ``batch`` share the same molecule-major node order and ``edge_attr`` /
-    ``edge_weight`` stay aligned column-for-column with ``edge_index`` — giving
-    identical GNN output. Provenance fields (atom_ids, selected_fragment_ids, …)
-    are intentionally omitted; use :func:`reconstruct_batch` when those are needed
-    (analysis / visualization paths).
+    ``edge_weight`` stay aligned column-for-column with ``edge_index``. Both paths
+    gate bonds through :func:`fragment_soft_importance`, so they agree on
+    ``edge_weight`` and produce the same GNN output. Provenance fields (atom_ids,
+    selected_fragment_ids, …) are intentionally omitted; use
+    :func:`reconstruct_batch` when those are needed (analysis / visualization).
     """
     device = batch.x.device
     mask = torch.as_tensor(selected_fragment_edge_mask, dtype=torch.bool, device=device)
@@ -458,27 +522,17 @@ def reconstruct_batch_fast(
     else:
         selected_bonds = torch.empty((0,), dtype=torch.long, device=device)
 
-    # Per-fragment soft importance from the continuous fragment-edge scores. A
-    # fragment is important if it participates in a strongly-scored edge, so we
-    # take the MAX incident score (max, not mean, so training-time sampler-dropped
-    # edges — which carry score 0 in the restored vector — don't dilute it).
-    # Fragments with no incident edge (single-fragment molecules) keep weight 1.0.
+    # Per-fragment soft importance from the continuous fragment-edge scores;
+    # see :func:`fragment_soft_importance`, shared with the per-molecule path.
     edge_scores_full = None
     frag_importance = None
     if selected_fragment_edge_weight is not None:
         edge_scores_full = torch.as_tensor(
             selected_fragment_edge_weight, dtype=batch.x.dtype, device=device
         )
-        num_frag_nodes = frag_node_batch.size(0)
-        frag_importance = edge_scores_full.new_ones(num_frag_nodes)
-        if frag_edge_index.numel():
-            endpoints = frag_edge_index.reshape(-1)
-            incident_max = edge_scores_full.new_zeros(num_frag_nodes).scatter_reduce(
-                0, endpoints, edge_scores_full.repeat(2), reduce="amax", include_self=False
-            )
-            frag_has_edge = torch.zeros(num_frag_nodes, dtype=torch.bool, device=device)
-            frag_has_edge[endpoints] = True
-            frag_importance = torch.where(frag_has_edge, incident_max, frag_importance)
+        frag_importance = fragment_soft_importance(
+            frag_node_batch.size(0), frag_edge_index, edge_scores_full
+        )
 
     # Per-bond weight (soft graph-wide gate, no hard fragment dropping):
     #   internal bonds -> their fragment's soft importance, so the scorer can
