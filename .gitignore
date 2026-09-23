@@ -1,7 +1,7 @@
 outputs/
 past outputs/
 
-data/
+/data/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -227,3 +227,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Generated experiment artifacts (historical tracked files are unaffected).
+/outputs/
+/outputs_*/
+/final_testing_outputs/
+/logs/
+/temp/

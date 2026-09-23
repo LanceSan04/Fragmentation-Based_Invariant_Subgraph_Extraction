@@ -1,11 +1,8 @@
-"""Regression tests for invariants that silently broke and cost OOD AUC.
+"""Regression tests for reconstruction and selection invariants.
 
-Each test here pins a property that was violated in the code that produced the
-40-epoch EC-Assay results, and whose violation is invisible from training logs:
-
-  * the selected subgraph must be the same size in training and evaluation,
-  * the fast and slow reconstructors must gate bonds identically,
-  * the atom featurizer must stay at its documented width.
+These tests pin selection budgets, reconstruction weights and feature widths.
+They do not establish a cause of historical AUC changes. Equal fragment-edge
+budgets do not guarantee equal reconstructed atom counts.
 
 Run from the repository root with:
 
@@ -52,10 +49,9 @@ def build_batch(smiles=SMILES, fragmentation="group_graph"):
 class TopKSizeInvarianceTests(unittest.TestCase):
     """k must be sized from the full edge count, not the eligible subset.
 
-    Sizing k from the eligible subset made a training subgraph
-    ratio * keep_ratio * E edges while evaluation built ratio * E, so the
-    classifier's BatchNorm statistics were fitted to graphs ~43% smaller than
-    the ones it was scored on.
+    Sizing k from eligible edges changes the intended budget from ratio * E
+    to approximately ratio * keep_ratio * E. The assertion concerns edge
+    counts when enough candidates remain, not a measured performance effect.
     """
 
     def setUp(self):
@@ -99,9 +95,8 @@ class TopKSizeInvarianceTests(unittest.TestCase):
 class ReconstructorAgreementTests(unittest.TestCase):
     """reconstruct_batch and reconstruct_batch_fast must gate bonds identically.
 
-    Training and evaluation use the fast path; the analysis and visualization
-    paths use the slow one. When they disagreed, published rationale figures
-    showed a subgraph the model had never actually been run on.
+    Training and evaluation use the fast path; analysis uses the slow one.
+    Check weighted-graph parity without assuming historical figure provenance.
     """
 
     def setUp(self):
@@ -119,11 +114,13 @@ class ReconstructorAgreementTests(unittest.TestCase):
 
         self.assertEqual(fast.x.size(0), slow.x.size(0))
         self.assertEqual(fast.edge_index.size(1), slow.edge_index.size(1))
-        # Edge emission order differs by design, so compare as multisets.
-        torch.testing.assert_close(
-            torch.sort(fast.edge_weight).values,
-            torch.sort(slow.edge_weight).values,
-        )
+        # Compare weights AND attributes attached to the same directed bond.
+        def order(graph):
+            return (graph.edge_index[0] * graph.x.size(0) + graph.edge_index[1]).argsort()
+        fi, si = order(fast), order(slow)
+        torch.testing.assert_close(fast.edge_index[:, fi], slow.edge_index[:, si])
+        torch.testing.assert_close(fast.edge_attr[fi], slow.edge_attr[si])
+        torch.testing.assert_close(fast.edge_weight[fi], slow.edge_weight[si])
 
     def test_internal_bonds_are_gated_not_left_at_one(self):
         fast = reconstruct_batch_fast(self.batch, self.mask, selected_fragment_edge_weight=self.scores)

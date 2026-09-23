@@ -1,0 +1,38 @@
+{
+  "train": {
+    "rows": 4684,
+    "labels": {
+      "1": 4041,
+      "0": 643
+    },
+    "domains": 167,
+    "invalid_smiles": 0,
+    "repeated_canonical_rows": 0
+  },
+  "ood_val": {
+    "rows": 2313,
+    "labels": {
+      "1": 1668,
+      "0": 645
+    },
+    "domains": 4,
+    "invalid_smiles": 0,
+    "repeated_canonical_rows": 0
+  },
+  "ood_test": {
+    "rows": 2398,
+    "labels": {
+      "1": 1636,
+      "0": 762
+    },
+    "domains": 16,
+    "invalid_smiles": 0,
+    "repeated_canonical_rows": 0
+  },
+  "canonical_overlap": {
+    "train__ood_val": 0,
+    "train__ood_test": 0,
+    "ood_val__ood_test": 0
+  },
+  "note": "Canonical isomeric SMILES overlap is diagnostic; supplied benchmark splits are preserved."
+}

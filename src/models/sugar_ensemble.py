@@ -19,7 +19,10 @@ class SuGAREnsemble:
     classifier probabilities by soft vote.
     """
 
-    def __init__(self, views, aggregation_mode="mean"):
+    def __init__(self, views, aggregation_mode="mean", inference_policy="shared"):
+        if inference_policy not in ("shared", "independent"):
+            raise ValueError("inference_policy must be shared or independent")
+        self.inference_policy = inference_policy
         if aggregation_mode not in ("mean", "max"):
             raise ValueError("aggregation_mode must be 'mean' or 'max'")
         self.views = list(views)
@@ -127,6 +130,10 @@ class SuGAREnsemble:
         if not views:
             raise ValueError("view_indices must contain at least one view")
 
+        if self.inference_policy == "independent":
+            stacked = torch.stack([view(batch_data) for view in views], dim=0)
+            return torch.logsumexp(stacked, dim=0) - math.log(len(views))
+
         all_log_probs = []
         # ERM views have no fragment scores to aggregate; each one classifies the
         # full atom graph on its own.
@@ -141,8 +148,8 @@ class SuGAREnsemble:
                 logits = view.atom_classifier(atom_batch)
                 all_log_probs.append(F.log_softmax(logits, dim=-1))
 
-        # log of the mean probability, computed in log space so a confidently
-        # wrong view cannot underflow the average to the clamp floor.
+        # Log of the mean probability, computed stably without clamping away
+        # gradients when all views assign a tiny probability to the true class.
         stacked = torch.stack(all_log_probs, dim=0)
         return torch.logsumexp(stacked, dim=0) - math.log(stacked.size(0))
 

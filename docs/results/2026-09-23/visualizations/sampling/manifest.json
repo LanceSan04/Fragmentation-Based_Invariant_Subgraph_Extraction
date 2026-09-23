@@ -1,0 +1,14 @@
+{
+  "checkpoint": "outputs/assay/select/seeds7001_7010/seed7001/best_shared.pt",
+  "sha256": "aadf327c25416f884f82ea23ae52e5966e80cbcc18461c1f46f6ff6ba23112c9",
+  "split": "ood_val",
+  "indices": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "mode": "sampling-demo",
+  "seed": 42
+}

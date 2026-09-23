@@ -1,0 +1,94 @@
+aggregation_mode: mean
+atom_feature_dim: 46
+batch_size: 64
+bond_feature_dim: 14
+compare_selection_policies: false
+contrast_sampling: mul
+contrast_temperature: 0.1
+dataset: drugood_lbap_core_ec50_assay
+debug: false
+debug_molecule_details: false
+debug_record_interval: 250
+device: cuda
+drop_last: false
+dropout: 0.3
+early_stopping: true
+edge_ratio: 0.3
+env_bucket_strategy: value
+env_split_key: domain_id
+environment_key: domain_id
+epochs: 100
+erm_baseline: false
+follow_batch:
+- fragment_x_static
+fragment_feature_dim: 62
+fragment_sample_ratio: 0.9
+generate_molecule_id: true
+gnn_layers: 3
+greedy_model_selection: false
+hidden_dim: 128
+label_key: cls_label
+lambda_contrast: 0.1
+lambda_diversity: 0.0
+lambda_irm: 0.0
+learning_rate: 0.001
+log_test_curve: false
+metadata_keys:
+- assay_id
+- reg_label
+- domain_id
+molecule_id_key: null
+num_classes: 2
+num_envs: 2
+num_views: 5
+num_workers: 4
+output_root: outputs/assay/diversity_schedule
+patience: 20
+pin_memory: true
+pooling: mean_atom_and_internal_bond
+preprocess_version: 0.1.0
+processed_dir: data/processed/ec50_followup_v1/assay
+processed_root: data/processed/multiview_ablation_v1
+raw_format: drugood_json
+raw_path: data/raw/drugood/lbap_core_ec50_assay.json
+report_splits: []
+run_name: auto
+sampler_seed: 101
+save_outputs:
+  checkpoint: true
+  effective_config: true
+  final_evaluation_metrics: true
+  preprocess_failures: true
+  preprocessing_fragmentation_diagnostics: true
+  run_manifest: true
+  subgraph_analysis: false
+  training_curves: true
+  training_epoch_losses: true
+seed: 101
+selection_ma_window: 1
+selection_weight_avg: false
+smiles_key: smiles
+split_names:
+- train
+- ood_val
+- ood_test
+strict: false
+subgraph_analysis_dir: null
+subgraph_metric_min_available: 10
+subgraph_metric_top_k: 25
+subgraph_num_samples: null
+subgraph_num_visualize: 3
+subgraph_split: ood_test
+test_split: null
+track_roc_auc: true
+train_split: train
+validation_split: ood_val
+view_fragmentations:
+  group_graph: 5
+weight_decay: 0.0001
+loader_split_names:
+- train
+- ood_val
+early_stopping_min_epochs: 30
+diversity_delay_epochs: 0
+diversity_ramp_epochs: 0

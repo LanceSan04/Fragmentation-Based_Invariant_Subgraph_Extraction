@@ -572,6 +572,8 @@ def reconstruct_batch_fast(
 
     return Data(
         x=batch.x[selected_atoms],
+        selected_original_atom_indices=selected_atoms,
+        selected_original_bond_indices=selected_bonds,
         edge_index=edge_index,
         edge_attr=edge_attr,
         edge_weight=edge_weight,

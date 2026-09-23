@@ -12,7 +12,7 @@ CLI options:
 
 Example:
     .\.venv\Scripts\python.exe scripts\plot_loss_logs.py ^
-        logs\sugar_training_losses.csv ^
+        outputs/logs/sugar_training_losses.csv ^
         --output-dir reports\training_diagnostics
 """
 

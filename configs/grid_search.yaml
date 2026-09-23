@@ -28,14 +28,14 @@ maximize: true
 #   {output_dir}/search/leaderboard.csv
 #   {output_dir}/search/best_params.json
 #   {output_dir}/eval/eval_results.json
-output_dir: final_testing_outputs
+output_dir: outputs/search/best_individual_auc_v1
 
 # search mode (Optuna study)
 # study_name identifies the persistent SQLite study saved at
 # {output_dir}/search/study.db. Re-running `search` with the same name resumes
 # it (only the remaining trials run); change the name (or delete study.db) to
 # start a fresh study, e.g. after editing the `grid` search space.
-study_name: parameter_search
+study_name: best_individual_auc_v1
 n_trials: 100                   # number of Optuna trials (parameter combinations)
 # Runs per trial (val metric averaged if >1). Seed-to-seed spread on this
 # benchmark is ~0.02 AUC, so 1-2 repeats cannot separate nearby configs; the
@@ -43,7 +43,7 @@ n_trials: 100                   # number of Optuna trials (parameter combination
 search_repeats: 3
 sampler_seed: 7                # Optuna TPE sampler seed (reproducible study)
 base_seed: 1                   # training run r uses training seed base_seed + r
-auc_ma_window: 5               # window (epochs) for the best moving-average
+auc_ma_window: 1               # window (epochs) for the best moving-average
 
 # eval mode
 eval_runs: 5                   # times to run the chosen config on the test split

@@ -1,0 +1,22 @@
+# Workflow defaults. Existing scientific settings are preserved.
+parameter_search:
+  n_trials: 24
+  search_repeats: 2
+  sampler_seed: 17
+  assay_seed: 201
+  size_seed: 401
+  grid:
+    learning_rate: [0.0001, 0.0003, 0.001, 0.003]
+    weight_decay: [0.0, 0.00001, 0.0001, 0.001]
+    dropout: [0.0, 0.1, 0.3, 0.5]
+    edge_ratio: [0.2, 0.3, 0.5, 0.7]
+    fragment_sample_ratio: [0.7, 0.9]
+selection:
+  seeds: [3001, 3002, 3003]
+  epochs: 100
+  size_overrides:
+    learning_rate: 0.001
+    weight_decay: 0.0001
+    dropout: 0.0
+    edge_ratio: 0.7
+    fragment_sample_ratio: 0.7

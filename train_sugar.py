@@ -61,6 +61,9 @@ class Config:
         if config_dict:
             for key, val in config_dict.items():
                 setattr(self, key, val)
+            if getattr(self, "processed_dir", None):
+                from src.data.paths import resolve_processed_path
+                self.processed_dir = resolve_processed_path(self.processed_dir)
 
     def get(self, key, default=None):
         return getattr(self, key, default)
@@ -215,10 +218,14 @@ def build_trainer(config, views, device):
         contrast_temperature=config.contrast_temperature,
         contrast_sampling=config.contrast_sampling,
         track_roc_auc=config.track_roc_auc,
-        loss_log_path=config.get("loss_log_path", "logs/sugar_training_losses.csv"),
+        loss_log_path=config.get("loss_log_path", "outputs/logs/sugar_training_losses.csv"),
         aggregation_mode=config.get("aggregation_mode", config.get("aggregation", "mean")),
+        inference_policy=config.get("inference_policy", "shared"),
         selection_ma_window=config.get("selection_ma_window", 1),
         selection_weight_avg=config.get("selection_weight_avg", False),
+        diversity_delay_epochs=config.get("diversity_delay_epochs", 0),
+        diversity_ramp_epochs=config.get("diversity_ramp_epochs", 0),
+        early_stopping_min_epochs=config.get("early_stopping_min_epochs", 0),
     )
 
 
@@ -356,7 +363,12 @@ def build_final_metrics_report(
         "report_splits",
         "num_views",
         "aggregation_mode",
+        "inference_policy",
         "track_roc_auc",
+        "early_stopping",
+        "selection_ma_window",
+        "selection_weight_avg",
+        "log_test_curve",
         "greedy_model_selection",
         "erm_baseline",
         "edge_ratio",
@@ -439,12 +451,26 @@ def seed_everything(seed):
 
 def run_training(config, resume_from=None):
     """Train FragmentCIGA views and optionally resume from a checkpoint."""
+    compare_policies = bool(config.get("compare_selection_policies", False))
+    if compare_policies:
+        if (config.get("test_split") is not None or config.get("report_splits") or
+                config.get("log_test_curve", False) or config.get("greedy_model_selection", False) or
+                config.get("selection_weight_avg", False) or not config.get("output_root") or
+                not config.get("validation_split") or config.get("selection_ma_window", 1) < 2 or
+                not config.get("track_roc_auc", False) or resume_from):
+            raise ValueError("Policy comparison requires fresh validation-only runs, output_root, AUC, window >=2, no greedy/weight averaging")
     seed_everything(config.get("seed"))
     checkpoint_payload = None
     if resume_from:
         checkpoint_payload = load_checkpoint(resume_from, map_location="cpu")
         apply_checkpoint_defaults(config, checkpoint_payload)
         align_num_views_to_checkpoint(config, checkpoint_payload)
+        saved_config = checkpoint_payload.get("config", {})
+        if config.get("inference_policy", "shared") != saved_config.get("inference_policy", "shared"):
+            raise ValueError("Changing inference policy requires fresh training, not resume")
+        if any(config.get(k, 0) or saved_config.get(k, 0) for k in
+               ("diversity_delay_epochs", "diversity_ramp_epochs")):
+            raise ValueError("Scheduled diversity requires fresh training; exact schedule resume is not implemented")
         print(f"Loaded checkpoint for resume: {resume_from}")
 
     prepare_run_outputs(config, command_name="train")
@@ -466,6 +492,9 @@ def run_training(config, resume_from=None):
 
     if train_loader is None:
         raise ValueError(f"No training data found for split {train_split!r} in {config.processed_dir}")
+
+    if compare_policies and val_loader is None:
+        raise ValueError("Policy comparison requires the configured validation loader")
 
     print("Building FragmentCIGA views...")
     feature_dims = checkpoint_feature_dims(checkpoint_payload) if checkpoint_payload is not None else {}
@@ -504,18 +533,27 @@ def run_training(config, resume_from=None):
     if val_loader is None and validation_split is not None:
         print(f"Validation split {validation_split!r} was not found; training without validation.")
     print(f"Starting training on split {train_split!r}...")
+    comparison = None
+    if compare_policies:
+        from src.training.policy_comparison import PolicyComparison
+        comparison = PolicyComparison(config, feature_dims)
     history = trainer.train(
         train_loader,
         val_loader=val_loader,
         num_epochs=config.epochs,
-        patience=config.patience,
+        patience=None if compare_policies or not config.get("early_stopping", True) else config.patience,
         restore_best_weights=True,
         diagnostic_loader=diagnostic_loader,
+        epoch_callback=comparison.observe if comparison else None,
     )
+
+    if comparison is not None:
+        comparison.finish(history)
 
     ensemble = SuGAREnsemble(
         trainer.views,
         aggregation_mode=config.get("aggregation_mode", config.get("aggregation", "mean")),
+        inference_policy=config.get("inference_policy", "shared"),
     )
 
     metrics = {}
@@ -662,6 +700,7 @@ def evaluate_checkpoint(config, checkpoint_path, split_names=None, use_selected_
     ensemble = SuGAREnsemble(
         views,
         aggregation_mode=config.get("aggregation_mode", config.get("aggregation", "mean")),
+        inference_policy=config.get("inference_policy", "shared"),
     )
 
     view_indices = None

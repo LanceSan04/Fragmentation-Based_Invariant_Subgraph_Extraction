@@ -10,7 +10,7 @@
 #     .\.venv\Scripts\python.exe main.py full --config configs\experiment.yaml --validate-loaders
 #
 #   Short end-to-end training smoke with checkpoint:
-#     .\.venv\Scripts\python.exe main.py train --config configs\experiment.yaml --run-name smoke_cpu --epochs 1 --patience 1 --num-views 1 --hidden-dim 8 --gnn-layers 1 --batch-size 512 --device cpu --lambda-contrast 0 --lambda-diversity 0 --lambda-irm 0
+#     python scripts/smoke_test.py
 #
 #   Evaluate a saved checkpoint without training:
 #     .\.venv\Scripts\python.exe main.py eval checkpoints\smoke.pt --config configs\experiment.yaml --splits ood_test iid_test --device cpu
@@ -20,7 +20,7 @@
 #
 #   Run diagnostics through the consolidated CLI:
 #     .\.venv\Scripts\python.exe main.py diagnostics fragments data\processed\drugood_lbap_core_ec50_assay\group_graph --splits train ood_val ood_test
-#     .\.venv\Scripts\python.exe main.py diagnostics losses logs\sugar_training_losses.csv
+#     .\.venv\Scripts\python.exe main.py diagnostics losses outputs/logs/sugar_training_losses.csv
 #
 # The original entrypoints still work for focused debugging:
 #   .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\experiment.yaml --validate-loaders
@@ -334,21 +334,14 @@ learning_rate: 0.001
 weight_decay: 0.0001
 epochs: 100
 patience: 20
+early_stopping: false  # Fixed 100-epoch budget; select the best individual validation AUC.
 device: cuda
 
-# Checkpoint-selection robustness.
-# The best epoch is chosen on a trailing moving average of the validation
-# selection metric (ensemble AUC), not the raw per-epoch value. The max of a
-# noisy validation-AUC curve is upward-biased and latches onto noise peaks that
-# do not transfer to the OOD test split (a different domain than ood_val), which
-# manufactures a large val>>test gap and noisy test AUC. Smoothing the selection
-# signal counteracts this and matches the grid-search objective (auc_ma_window).
-# selection_ma_window accepted: positive integer. 1 = raw single-best-epoch
-#   (legacy behavior); 5 aligns with the grid-search moving-average objective.
-# selection_weight_avg accepted: true | false. When true, restore an SWA-style
-#   average of the top selection_ma_window snapshots instead of a single one.
-selection_ma_window: 5
-selection_weight_avg: false
+# Primary policy: highest individual ensemble validation AUC.
+# Window 1 selects an actual epoch directly; larger complete windows remain
+# available for historical comparisons. Averaging weights is guarded for BN.
+selection_ma_window: 1
+selection_weight_avg: false  # BatchNorm averaging is guarded until recalibration is implemented.
 
 # Diagnostic-only per-epoch test-curve logging. When true, the test split is
 # evaluated every epoch and its loss/acc/auc are logged next to validation in

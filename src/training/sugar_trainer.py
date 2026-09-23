@@ -14,6 +14,7 @@ from src.losses.diversity import pairwise_diversity_loss
 from src.losses.irm import invariant_risk_loss
 from src.models.fragment_graph import build_fragment_graph_batch
 from src.models.sugar_ensemble import SuGAREnsemble
+from src.training.selection_metrics import trailing_mean
 
 try:
     from sklearn.metrics import roc_auc_score as _sklearn_roc_auc
@@ -49,6 +50,10 @@ class SuGARTrainer:
         aggregation_mode="mean",
         selection_ma_window=1,
         selection_weight_avg=False,
+        diversity_delay_epochs=0,
+        diversity_ramp_epochs=0,
+        early_stopping_min_epochs=0,
+        inference_policy="shared",
     ):
         """
         Args:
@@ -86,11 +91,13 @@ class SuGARTrainer:
                 average of the validation selection metric used to pick the
                 best epoch. ``1`` reproduces raw single-best-epoch selection;
                 a larger window (e.g. 5, matching the grid-search objective)
-                smooths per-epoch validation-AUC noise so the restored
-                checkpoint is not chosen on an upward-biased noise peak.
+                uses only complete finite windows. Patience starts after the
+                first eligible window; this reduces sensitivity to single peaks
+                but does not remove selection bias.
             selection_weight_avg: If True, restore an SWA-style average of the
                 top ``selection_ma_window`` snapshots (ranked by smoothed
-                metric) instead of the single best snapshot. Off by default.
+                metric) instead of the single best snapshot. Off by default;
+                rejected for BatchNorm models pending proper recalibration.
         """
         self.views = [v.to(device) for v in views]
         self.device = device
@@ -108,15 +115,31 @@ class SuGARTrainer:
         self.contrast_temperature = contrast_temperature
         self.contrast_sampling = contrast_sampling
         self.track_roc_auc = track_roc_auc and _SKLEARN_AVAILABLE
+        self.diversity_delay_epochs = int(diversity_delay_epochs)
+        self.diversity_ramp_epochs = int(diversity_ramp_epochs)
+        self.early_stopping_min_epochs = int(early_stopping_min_epochs)
+        if min(self.diversity_delay_epochs, self.diversity_ramp_epochs, self.early_stopping_min_epochs) < 0:
+            raise ValueError("Schedule durations must be nonnegative")
+        self.effective_diversity_weight = self.lambda_diversity
         self.loss_log_path = Path(loss_log_path) if loss_log_path else None
         # Validation is scored through the same shared-subgraph aggregation +
         # soft-vote path used at final test time. The ensemble holds references
         # to the same view objects, so weight updates are reflected without any
         # re-wrapping.
         self.aggregation_mode = aggregation_mode
-        self.selection_ma_window = max(1, int(selection_ma_window))
+        self.selection_ma_window = int(selection_ma_window)
+        if self.selection_ma_window < 1:
+            raise ValueError("selection_ma_window must be positive")
         self.selection_weight_avg = bool(selection_weight_avg)
-        self.ensemble = SuGAREnsemble(self.views, aggregation_mode=aggregation_mode)
+        if self.selection_weight_avg and any(
+            isinstance(module, torch.nn.modules.batchnorm._BatchNorm)
+            for view in self.views for module in view.modules()
+        ):
+            raise ValueError(
+                "selection_weight_avg is unsupported for BatchNorm models until "
+                "normalization recalibration is implemented; set it to false."
+            )
+        self.ensemble = SuGAREnsemble(self.views, aggregation_mode=aggregation_mode, inference_policy=inference_policy)
         if track_roc_auc and not _SKLEARN_AVAILABLE:
             print("Warning: scikit-learn not found; ROC-AUC tracking disabled.")
 
@@ -207,7 +230,7 @@ class SuGARTrainer:
             else:
                 diversity = labels.new_zeros(())
             components["diversity_loss"] = diversity
-            components["diversity_loss_weighted"] = self.lambda_diversity * diversity
+            components["diversity_loss_weighted"] = self.effective_diversity_weight * diversity
 
         if batch_env is not None:
             irm_terms = [
@@ -497,8 +520,8 @@ class SuGARTrainer:
     def evaluate_all(self, eval_loader, return_loss_components=False):
         """Single-pass evaluation returning per-view and ensemble metrics.
 
-        The ensemble ``accuracy``/``roc_auc`` are scored through the shared
-        top-k subgraph aggregation + soft-vote path (``self.ensemble``) — the
+        The ensemble ``accuracy``/``roc_auc`` are scored through the configured
+        inference policy (``self.ensemble``) — the
         same path used at final test time — so best-epoch and early-stop
         selection are made on the true inference path rather than on an average
         of independent per-view predictions. Per-view metrics still come from
@@ -590,6 +613,7 @@ class SuGARTrainer:
     def _loss_log_fieldnames(self):
         return (
             "epoch",
+            "effective_diversity_weight",
             "train_loss",
             "train_prediction_loss",
             "train_contrastive_loss",
@@ -611,6 +635,7 @@ class SuGARTrainer:
             "val_auc",
             "val_selection_metric",
             "val_selection_metric_name",
+            "val_selection_metric_smoothed",
             "val_acc_per_view",
             "val_auc_per_view",
             # Diagnostic-only per-epoch test-split metrics (populated only when a
@@ -637,8 +662,8 @@ class SuGARTrainer:
             writer.writerow(row)
 
     def train(self, train_loader, val_loader=None, num_epochs=100, patience=20,
-              restore_best_weights=True, diagnostic_loader=None):
-        """Full training loop with AUC-aware per-view best-weight tracking.
+              restore_best_weights=True, diagnostic_loader=None, epoch_callback=None):
+        """Full training loop with complete-window joint checkpoint selection.
 
         ``diagnostic_loader`` (typically the test split) is evaluated once per
         epoch purely to log its per-epoch AUC alongside validation. It is NEVER
@@ -646,6 +671,8 @@ class SuGARTrainer:
         the validation/test decoupling visible. Leaking it into selection would
         be test-set peeking, so keep it strictly out of the selection path.
         """
+        if val_loader is not None and num_epochs < self.selection_ma_window:
+            raise ValueError("epochs must be >= selection_ma_window; use window=1 for a one-epoch smoke test")
         num_views = len(self.views)
         history = {
             "train_loss": [],
@@ -657,6 +684,7 @@ class SuGARTrainer:
             "val_auc_per_view": [],
             "val_selection_metric": [],
             "val_selection_metric_name": [],
+            "val_selection_metric_smoothed": [],
             "test_loss": [],
             "test_acc": [],
             "test_auc": [],
@@ -665,16 +693,15 @@ class SuGARTrainer:
             history[f"train_{key}"] = []
             history[f"val_{key}"] = []
 
-        # Best-epoch selection is made on the shared-subgraph ensemble metric
+        # Best-epoch selection is made on the configured ensemble metric
         # (the true inference path), and all views are snapshotted together at
         # that single epoch. Restoring each view from its own independently-best
         # epoch would mix maskers the aggregated score vote never validated.
         #
         # Selection is driven by a trailing moving average of the validation
         # metric (window = selection_ma_window) rather than the raw per-epoch
-        # value: the max of a noisy AUC curve is upward-biased, so single-best
-        # selection latches onto noise peaks that do not transfer to the (OOD,
-        # different-domain) test split. window=1 reproduces the old behavior.
+        # value. Complete windows reduce sensitivity to individual peaks but
+        # do not guarantee better OOD performance. window=1 retains raw selection.
         raw_metric_history = []
         # Retained top snapshots ranked by smoothed metric. Capacity is 1 for
         # plain best-epoch restore, or the MA window when averaging weights.
@@ -688,7 +715,17 @@ class SuGARTrainer:
         patience_counter = 0
         self._initialize_loss_log()
 
+        from src.training.diversity_schedule import diversity_weight
+        history["effective_diversity_weight"] = []
+        stop_floor = max(self.early_stopping_min_epochs,
+                         self.diversity_delay_epochs + self.diversity_ramp_epochs
+                         if self.lambda_diversity > 0 else 0)
         for epoch in range(num_epochs):
+            self.effective_diversity_weight = diversity_weight(
+                self.lambda_diversity, epoch + 1, self.diversity_delay_epochs, self.diversity_ramp_epochs)
+            history["effective_diversity_weight"].append(self.effective_diversity_weight)
+            if epoch + 1 <= stop_floor:
+                patience_counter = 0
             train_loss, train_acc, train_components = self.train_epoch(
                 train_loader,
                 return_loss_components=True,
@@ -706,6 +743,7 @@ class SuGARTrainer:
             view_val_accs = []
             view_val_aucs = []
             val_selection_metric = None
+            smoothed_metric = None
             metric_label = best_metric_label
 
             if val_loader is not None:
@@ -741,29 +779,39 @@ class SuGARTrainer:
                     f"Selection val_{metric_label}: {val_selection_metric:.4f}"
                 )
 
-                raw_metric_history.append(val_selection_metric)
-                window = raw_metric_history[-self.selection_ma_window:]
-                smoothed_metric = sum(window) / len(window)
-
-                if smoothed_metric > best_val_metric:
-                    best_val_metric = smoothed_metric
+                # Never mix fallback accuracy with AUC in the same window.
+                if (len(history["val_selection_metric_name"]) > 1 and
+                        history["val_selection_metric_name"][-2] != metric_label):
+                    raw_metric_history.clear()
+                    retained_snapshots.clear()
+                    best_val_metric = -float("inf")
+                    best_snapshot_epoch = None
                     patience_counter = 0
-                    if restore_best_weights:
-                        weights = [deepcopy(v.state_dict()) for v in self.views]
+                raw_metric_history.append(val_selection_metric)
+                smoothed_metric = trailing_mean(raw_metric_history, self.selection_ma_window)
+                history["val_selection_metric_smoothed"].append(smoothed_metric)
+
+                if smoothed_metric is not None:
+                    # Top-K includes runners-up, not only new all-time records.
+                    if restore_best_weights and (
+                        len(retained_snapshots) < snapshot_capacity or
+                        smoothed_metric > retained_snapshots[-1]["metric"]
+                    ):
                         self._retain_snapshot(
-                            retained_snapshots,
-                            snapshot_capacity,
-                            smoothed_metric,
-                            epoch + 1,
-                            weights,
+                            retained_snapshots, snapshot_capacity, smoothed_metric,
+                            epoch + 1, [deepcopy(v.state_dict()) for v in self.views],
                         )
                         best_snapshot_epoch = retained_snapshots[0]["epoch"]
-                else:
-                    patience_counter += 1
-
-                if patience_counter >= patience:
-                    print(f"Early stopping at epoch {epoch + 1}")
-                    should_stop = True
+                    if smoothed_metric > best_val_metric:
+                        best_val_metric = smoothed_metric
+                        patience_counter = 0
+                    else:
+                        patience_counter += 1
+                    if epoch + 1 <= stop_floor:
+                        patience_counter = 0
+                    if patience is not None and epoch + 1 > stop_floor and patience_counter >= patience:
+                        print(f"Early stopping at epoch {epoch + 1}")
+                        should_stop = True
             else:
                 print(
                     f"Epoch {epoch + 1}/{num_epochs} | "
@@ -791,6 +839,7 @@ class SuGARTrainer:
             self._append_loss_log_row(
                 {
                     "epoch": epoch + 1,
+                    "effective_diversity_weight": self.effective_diversity_weight,
                     "train_loss": train_loss,
                     "train_prediction_loss": train_components["prediction_loss"],
                     "train_contrastive_loss": train_components["contrastive_loss"],
@@ -812,6 +861,7 @@ class SuGARTrainer:
                     "val_auc": val_auc,
                     "val_selection_metric": val_selection_metric,
                     "val_selection_metric_name": metric_label,
+                    "val_selection_metric_smoothed": smoothed_metric,
                     "val_acc_per_view": "|".join(f"{v:.6f}" for v in view_val_accs),
                     "val_auc_per_view": "|".join(
                         "" if v is None else f"{v:.6f}" for v in view_val_aucs
@@ -822,9 +872,17 @@ class SuGARTrainer:
                 }
             )
 
+            if epoch_callback is not None and val_loader is not None:
+                epoch_callback(self, epoch + 1, val_selection_metric, smoothed_metric, metric_label)
             if should_stop:
                 break
 
+        if val_loader is not None and best_val_metric == -float("inf"):
+            raise ValueError("No complete finite validation selection window was recorded")
+        history["selected_checkpoint_epoch"] = best_snapshot_epoch
+        history["best_selection_metric_smoothed"] = (
+            best_val_metric if best_val_metric != -float("inf") else None
+        )
         if restore_best_weights and retained_snapshots:
             window_note = (
                 f" (MA window {self.selection_ma_window})"

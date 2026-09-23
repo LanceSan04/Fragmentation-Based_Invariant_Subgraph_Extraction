@@ -159,8 +159,8 @@ class FragmentCIGA(nn.Module):
         """
         atom_batch = Data(
             x=batch_data.x,
-            edge_index=batch_data.bond_index,
-            edge_attr=batch_data.bond_attr,
+            edge_index=batch_data.edge_index,
+            edge_attr=batch_data.edge_attr,
             batch=batch_data.batch,
         )
         logits, h_graph = self.atom_classifier(atom_batch, return_embeddings=True)
@@ -236,6 +236,9 @@ class FragmentCIGA(nn.Module):
         if return_intermediates:
             return predictions, {
                 "embeddings": h_graph,
+                "selected_fragment_mask": bool_mask,
+                "selected_atom_ids": atom_batch.selected_original_atom_indices,
+                "selected_bond_ids": atom_batch.selected_original_bond_indices,
                 "fragment_scores": edge_scores,
                 "fragment_edge_batch": edge_batch,
                 "fragment_edge_eligible": eligible_mask.to(
@@ -255,6 +258,8 @@ class FragmentCIGA(nn.Module):
         Returns:
             Batched reconstructed atom-level PyG Data
         """
+        if self.erm_baseline:
+            raise ValueError("ERM uses the full atom graph; fragment rationale extraction is not applicable.")
         device = batch_data.x.device
         fragment_batch = build_fragment_graph_batch(
             batch_data,

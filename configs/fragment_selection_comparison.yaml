@@ -1,0 +1,87 @@
+# Fixed-budget validation-only comparison; patience is ignored in this mode.
+output_root: outputs/assay/policy_comparison
+run_name: auto
+save_outputs:
+  checkpoint: true
+  training_epoch_losses: true
+  final_evaluation_metrics: true
+  training_curves: true
+  preprocessing_fragmentation_diagnostics: true
+  subgraph_analysis: false
+  effective_config: true
+  run_manifest: true
+  preprocess_failures: true
+dataset: drugood_lbap_core_ec50_assay
+preprocess_version: 0.1.0
+view_fragmentations:
+  group_graph: 1
+pooling: mean_atom_and_internal_bond
+atom_feature_dim: 46
+bond_feature_dim: 14
+fragment_feature_dim: 62
+processed_root: data/processed/controls_v1
+processed_dir: null
+raw_path: data/raw/drugood/lbap_core_ec50_assay.json
+raw_format: drugood_json
+smiles_key: smiles
+label_key: cls_label
+environment_key: domain_id
+molecule_id_key: null
+generate_molecule_id: true
+metadata_keys:
+- assay_id
+- reg_label
+- domain_id
+split_names:
+- train
+- ood_val
+train_split: train
+validation_split: ood_val
+test_split: null
+report_splits: []
+strict: false
+debug: true
+debug_record_interval: 250
+debug_molecule_details: false
+batch_size: 64
+num_workers: 4
+pin_memory: true
+drop_last: false
+seed: 7
+follow_batch:
+- fragment_x_static
+num_classes: 2
+gnn_layers: 3
+hidden_dim: 128
+edge_ratio: 0.3
+num_views: 1
+dropout: 0.3
+erm_baseline: false
+fragment_sample_ratio: 0.9
+sampler_seed: 7
+learning_rate: 0.001
+weight_decay: 0.0001
+epochs: 100
+patience: 20
+device: cuda
+selection_ma_window: 5
+selection_weight_avg: false
+log_test_curve: false
+subgraph_analysis_dir: null
+subgraph_split: ood_test
+subgraph_num_samples: null
+subgraph_num_visualize: 3
+subgraph_metric_min_available: 10
+subgraph_metric_top_k: 25
+lambda_contrast: 0.0
+lambda_diversity: 0.0
+lambda_irm: 0.0
+num_envs: 1
+env_split_key: domain_id
+env_bucket_strategy: value
+contrast_temperature: 0.1
+contrast_sampling: mul
+track_roc_auc: true
+greedy_model_selection: false
+aggregation_mode: mean
+compare_selection_policies: true

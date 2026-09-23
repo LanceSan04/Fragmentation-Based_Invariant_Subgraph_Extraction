@@ -86,6 +86,9 @@ COMMON_OVERRIDES = (
     "device",
     "epochs",
     "patience",
+    "seed",
+    "sampler_seed",
+    "selection_ma_window",
     "num_views",
     "hidden_dim",
     "gnn_layers",
@@ -243,7 +246,9 @@ def run_full_command(args):
     else:
         print("training_curves output disabled; skipping loss plots.")
 
-    if output_enabled(config, "subgraph_analysis"):
+    if config.get("erm_baseline", False):
+        print("ERM uses the full atom graph; skipping fragment rationale analysis.")
+    elif output_enabled(config, "subgraph_analysis"):
         model_path = args.subgraph_model_path or config.get("save_model", None)
         if model_path:
             run_subgraph_diagnostics(
@@ -277,7 +282,7 @@ def run_search_command(args):
     CLI overrides) and hand the same dict to both preprocessing and the study.
     """
     from src.data.preprocess import run_preprocessing
-    from scripts.grid_search import load_spec, run_search
+    from src.experiments.search import load_spec, run_search
 
     config_path = Path(args.config)
     if not config_path.is_absolute():
@@ -305,7 +310,7 @@ def run_search_eval_command(args):
     split and writes eval_results.json).
     """
     from src.data.preprocess import run_preprocessing
-    from scripts.grid_search import load_spec, run_eval
+    from src.experiments.search import load_spec, run_eval
 
     config_path = Path(args.config)
     if not config_path.is_absolute():
@@ -444,6 +449,9 @@ def run_inspect_command(args):
 
 def add_common_arguments(parser):
     parser.add_argument("--config", default="configs/experiment.yaml")
+    parser.add_argument("--seed", type=int, help="Model, dropout and loader seed.")
+    parser.add_argument("--sampler-seed", type=int, help="Fragment-edge sampling seed.")
+    parser.add_argument("--selection-ma-window", type=int, help="Complete validation window; use 1 for one-epoch smoke runs.")
     parser.add_argument("--dataset")
     parser.add_argument("--processed-root", dest="processed_root")
     parser.add_argument("--processed-dir", dest="processed_dir")
@@ -516,6 +524,8 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    subparsers.add_parser("experiment", help="Search, benchmarks, policy comparisons and diagnostics; use experiment --help.")
 
     preprocess = subparsers.add_parser("preprocess", help="Run dataset preprocessing.")
     add_common_arguments(preprocess)
@@ -676,8 +686,12 @@ def build_parser():
 
 
 def main(argv=None):
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "experiment":
+        from src.experiments.cli import main as experiment_main
+        return experiment_main(arguments[1:])
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(arguments)
     return args.func(args)
 
 
