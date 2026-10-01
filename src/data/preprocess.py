@@ -177,6 +177,11 @@ def load_raw_dataset(config):
 
     raw_path = _config_get(config, "raw_path")
     raw_format = str(_config_get(config, "raw_format", "") or "").lower()
+    if raw_format in {"good_hiv_scaffold_covariate_zip", "good_hiv_size_covariate_zip"}:
+        from src.data.good_hiv import read_good_hiv_archive
+        domain = "scaffold" if "scaffold" in raw_format else "size"
+        return read_good_hiv_archive(raw_path, domain,
+                                    _config_get(config, "split_names", ["train", "ood_val", "ood_test"]))
     if raw_path is not None and osp.splitext(raw_path)[1].lower() == ".json":
         with open(raw_path, encoding="utf-8") as handle:
             payload = json.load(handle)

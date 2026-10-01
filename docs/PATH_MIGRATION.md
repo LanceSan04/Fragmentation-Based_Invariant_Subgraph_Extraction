@@ -1,4 +1,4 @@
-# Output and cache migration — September 23, 2026
+# Output and cache migration — September 24, 2026
 
 The active workspace now has one result root: outputs/. Reusable caches belong in data/processed/. Explicit user --output-dir overrides are still honored; defaults no longer create root outputs_* or logs folders.
 
@@ -22,30 +22,13 @@ A missing historical Assay cache path ending in outputs_overnight_losses_2026091
 
 The .gitignore data rule is now root-anchored (/data/) so new source files under src/data are not accidentally ignored.
 
-## Server steps
+## Server migration completed
 
-Stop project training/diagnostic jobs first. Extract REU_Path_Migration_Update.zip into the existing server project, preserving directories and replacing matching code/config files. This is a partial update, not a full installation.
+On 2026-09-24, an idle server was inventoried, the migration script was verified and dry-run, and 28 root-level entries were moved into `outputs/` or `data/processed/`. All 28 moves passed SHA256 before/after checks. The recovery map is `outputs/migrations/20260924_041342_199264/moves.json`. There are no remaining root-level `outputs_*` entries. Five named Assay studies are under `outputs/assay/`; older studies retain their original names under `outputs/legacy/`; the old reusable Assay cache is `data/processed/ec50_followup_v1/assay`.
 
-Preview:
+The two records under `/home/lsantiago4/reu_runs` were separately moved and file-hash verified: the failed pilot is under `outputs/assay/baseline_study_v1/failed_pilot_20260923_01`, and the synthetic smoke is under `outputs/smoke/remote_validation/smoke_release_20260923_01`. The recovery map is `outputs/migrations/reu_runs_20260924.json`. The empty `/home/lsantiago4/reu_runs` directory was removed. No research result or checkpoint was deleted or overwritten.
 
-```bash
-cd /home/lsantiago4/REU_Summer_2026
-.venv-reu-server/bin/python scripts/migrate_workspace_paths.py
-```
-
-Apply:
-
-```bash
-.venv-reu-server/bin/python scripts/migrate_workspace_paths.py --apply
-```
-
-Then verify:
-
-```bash
-.venv-reu-server/bin/python main.py experiment select --dataset assay --smoke --evaluate-test --device cuda
-```
-
-The migration preflights destination collisions and rejects symlinks. It refuses visible project Python jobs, does not merge/delete/overwrite results, and verifies SHA256 before/after each move. It records a recovery manifest under outputs/migrations. Missing legacy folders are skipped. Unknown root outputs_* items go under outputs/legacy with original names. A collision is a stop condition requiring inspection; do not delete either directory to bypass it. Partial interrupted migrations leave recorded moves; inspect the manifest before retrying. Renames require a single filesystem; a cross-filesystem rename error stops the process without copy/delete fallback.
+The migration script preflighted destination collisions and symlinks, refused visible project Python jobs, and verified SHA256 before/after each move. It did not rewrite historical saved configs, results, or checkpoints; old absolute paths embedded in those records may refer to their former locations. Future jobs should use the canonical paths directly.
 
 Windows local moves were performed with native PowerShell after resolving paths. The server script's --apply is deliberately Linux-only.
 

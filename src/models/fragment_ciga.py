@@ -8,8 +8,10 @@ from torch_geometric.explain.algorithm.utils import set_masks, clear_masks
 
 from src.models.fragment_masker import FragmentMasker, segment_topk_mask
 from src.models.gnn_encoders import SimpleGNN
-from src.models.fragment_graph import build_fragment_graph_batch
+from src.models.fragment_graph import build_fragment_graph_batch, get_fragment_view_value
+from src.models.atom_budget_selection import atom_budget_mask
 from src.models.fragment_edge_sampler import FragmentEdgeSampler
+from src.models.random_fragment_selection import random_edge_ranks
 from src.models.atom_reconstructor import reconstruct_batch, reconstruct_batch_fast
 from src.data.atom_graph import ATOM_FDIM, BOND_FDIM
 
@@ -116,6 +118,11 @@ class FragmentCIGA(nn.Module):
         sampler_seed=None,
         fragmentation_method=None,
         erm_baseline=False,
+        selection_mode="learned",
+        scoring_mode="ordered",
+        selection_budget="edges",
+        atom_retention_ratio=0.65,
+        ranking_mode="learned",
     ):
         super().__init__()
         if fragment_feature_dim is None:
@@ -126,6 +133,22 @@ class FragmentCIGA(nn.Module):
         # pipeline has to be priced against, since published ERM numbers for
         # DrugOOD EC50-Assay disagree by ~8 AUC points across papers.
         self.erm_baseline = erm_baseline
+        if selection_mode not in ("learned", "random"):
+            raise ValueError("selection_mode must be learned or random")
+        if erm_baseline and selection_mode != "learned":
+            raise ValueError("ERM has no fragment selection mode")
+        if selection_budget not in ('edges', 'atoms') or ranking_mode not in ('learned', 'random'):
+            raise ValueError('Invalid selection budget or ranking mode')
+        if not 0 < atom_retention_ratio <= 1:
+            raise ValueError('atom_retention_ratio must be in (0, 1]')
+        if (erm_baseline or selection_mode == 'random') and (selection_budget != 'edges' or ranking_mode != 'learned'):
+            raise ValueError('New budget/ranking settings require learned fragment selection mode')
+        self.selection_budget = selection_budget
+        self.atom_retention_ratio = float(atom_retention_ratio)
+        self.ranking_mode = ranking_mode
+        self._ranking_call_count = 0
+        self.selection_mode = selection_mode
+        self.random_selection_seed = 0 if sampler_seed is None else int(sampler_seed)
 
         self.fragment_edge_sampler = FragmentEdgeSampler(
             keep_ratio=fragment_sample_ratio,
@@ -139,6 +162,7 @@ class FragmentCIGA(nn.Module):
             dropout=dropout,
             ratio=edge_ratio,
             edge_dim=fragment_edge_dim,
+            scoring_mode=scoring_mode,
         )
         self.atom_classifier = AtomClassifier(
             input_dim=atom_feature_dim,
@@ -177,6 +201,43 @@ class FragmentCIGA(nn.Module):
             }
         return predictions
 
+    def score_fragment_edges(self, fragment_batch):
+        """Return full-edge ranks and eligibility for learned or random selection."""
+        sampled, eligible = self.fragment_edge_sampler(fragment_batch)
+        if self.selection_mode == "random":
+            sampled_scores = random_edge_ranks(
+                sampled, self.random_selection_seed, self.training
+            )
+        else:
+            sampled_scores, _ = self.fragment_masker(sampled)
+        _, full_scores = restore_full_edge_outputs(
+            fragment_batch.edge_index.size(1),
+            sampled.full_fragment_edge_id,
+            torch.zeros_like(sampled_scores, dtype=torch.bool),
+            sampled_scores,
+        )
+        return full_scores, eligible
+
+    def select_fragment_edges(self, batch_data, fragment_batch, scores, eligible):
+        """One selection path shared by training, inference and extraction."""
+        ranks = scores.detach()
+        if self.ranking_mode == 'random':
+            if self.training:
+                generator = torch.Generator(device=scores.device)
+                generator.manual_seed(self.random_selection_seed + 1000003 + self._ranking_call_count)
+                self._ranking_call_count += 1
+                ranks = torch.rand(scores.shape, device=scores.device, generator=generator)
+            else:
+                ranks = random_edge_ranks(fragment_batch, self.random_selection_seed, False)
+        edge_batch = fragment_batch.batch[fragment_batch.edge_index[0]]
+        if self.selection_budget == 'edges':
+            return topk_mask_over_eligible(ranks, edge_batch, self.fragment_masker.ratio, eligible)
+        atom_to_fragment = get_fragment_view_value(batch_data, 'atom_to_fragment', self.fragmentation_method)
+        sizes = torch.bincount(atom_to_fragment, minlength=fragment_batch.x.size(0))
+        atom_counts = torch.bincount(batch_data.batch, minlength=batch_data.num_graphs)
+        return atom_budget_mask(ranks, fragment_batch.edge_index, fragment_batch.batch,
+                                sizes, atom_counts, eligible, self.atom_retention_ratio)
+
     def forward(self, batch_data, return_intermediates=False, fragment_batch=None):
         """Per-view forward pass: mask → reconstruct → classify.
 
@@ -205,28 +266,19 @@ class FragmentCIGA(nn.Module):
                 method=self.fragmentation_method,
             ).to(device)
 
-        sampled_fragment_batch, eligible_mask = self.fragment_edge_sampler(fragment_batch)
-        sampled_edge_scores, sampled_bool_mask = self.fragment_masker(sampled_fragment_batch)
-
-        _, edge_scores = restore_full_edge_outputs(
-            fragment_batch.edge_index.size(1),
-            sampled_fragment_batch.full_fragment_edge_id,
-            sampled_bool_mask,
-            sampled_edge_scores,
-        )
+        edge_scores, eligible_mask = self.score_fragment_edges(fragment_batch)
 
         edge_batch = fragment_batch.batch[fragment_batch.edge_index[0]]
-        bool_mask = topk_mask_over_eligible(
-            edge_scores.detach(),
-            edge_batch,
-            self.fragment_masker.ratio,
-            eligible_mask.to(device=edge_scores.device, dtype=torch.bool),
-        )
+        bool_mask = self.select_fragment_edges(batch_data, fragment_batch, edge_scores, eligible_mask)
 
+        reconstruction_weights = (
+            bool_mask.to(edge_scores.dtype)
+            if self.selection_mode == "random" else edge_scores
+        )
         atom_batch = reconstruct_batch_fast(
             batch_data,
             bool_mask,
-            selected_fragment_edge_weight=edge_scores,
+            selected_fragment_edge_weight=reconstruction_weights,
             fragmentation_method=self.fragmentation_method,
         )
 
@@ -239,7 +291,7 @@ class FragmentCIGA(nn.Module):
                 "selected_fragment_mask": bool_mask,
                 "selected_atom_ids": atom_batch.selected_original_atom_indices,
                 "selected_bond_ids": atom_batch.selected_original_bond_indices,
-                "fragment_scores": edge_scores,
+                "fragment_scores": edge_scores if self.selection_mode == "learned" else None,
                 "fragment_edge_batch": edge_batch,
                 "fragment_edge_eligible": eligible_mask.to(
                     device=edge_scores.device, dtype=torch.bool
@@ -265,17 +317,15 @@ class FragmentCIGA(nn.Module):
             batch_data,
             method=self.fragmentation_method,
         ).to(device)
-        sampled_fragment_batch, _ = self.fragment_edge_sampler(fragment_batch)
-        sampled_edge_scores, sampled_bool_mask = self.fragment_masker(sampled_fragment_batch)
-        full_mask, edge_scores = restore_full_edge_outputs(
-            fragment_batch.edge_index.size(1),
-            sampled_fragment_batch.full_fragment_edge_id,
-            sampled_bool_mask,
-            sampled_edge_scores,
-        )
+        edge_scores, eligible = self.score_fragment_edges(fragment_batch)
+        edge_batch = fragment_batch.batch[fragment_batch.edge_index[0]]
+        full_mask = self.select_fragment_edges(batch_data, fragment_batch, edge_scores, eligible)
         return reconstruct_batch(
             batch_data,
             full_mask,
-            selected_fragment_edge_weight=edge_scores,
+            selected_fragment_edge_weight=(
+                full_mask.to(edge_scores.dtype)
+                if self.selection_mode == "random" else edge_scores
+            ),
             fragmentation_method=self.fragmentation_method,
         )

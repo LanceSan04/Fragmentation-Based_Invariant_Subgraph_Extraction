@@ -45,7 +45,8 @@ def segment_topk_mask(scores, edge_batch, ratio, eligible_mask=None):
     Python loop with a single segmented sort so the whole batch is handled in a
     few vectorized ops.
 
-    Ties in score are broken arbitrarily, as with ``torch.topk``.
+    Exact score ties retain original edge-column order, independently of other
+    graphs in the batch. Near ties may still vary with floating-point arithmetic.
     """
     device = scores.device
     mask = torch.zeros_like(scores, dtype=torch.bool)
@@ -75,7 +76,7 @@ def segment_topk_mask(scores, edge_batch, ratio, eligible_mask=None):
 
     # Order candidates by (graph asc, score desc); the second sort is stable so
     # the score ordering is preserved within each graph.
-    order_s = torch.argsort(s, descending=True)
+    order_s = torch.argsort(s, descending=True, stable=True)
     order_g = torch.argsort(g[order_s], stable=True)
     perm = order_s[order_g]
 
@@ -104,9 +105,15 @@ class FragmentMasker(nn.Module):
         dropout=0.0,
         ratio=0.5,
         edge_dim=None,
+        scoring_mode="ordered",
     ):
         super().__init__()
         self.ratio = ratio
+        if scoring_mode not in ("ordered", "symmetric"):
+            raise ValueError("scoring_mode must be ordered or symmetric")
+        if scoring_mode == "symmetric" and edge_dim not in (None, FRAGMENT_EDGE_DIM):
+            raise ValueError("Symmetric scoring requires the known fragment edge feature layout")
+        self.scoring_mode = scoring_mode
         self.gnn_encoder = SimpleGNN(input_dim, hidden_dim, num_layers, dropout, edge_dim=edge_dim)
         self.edge_att = nn.Sequential(
             nn.Linear((hidden_dim * 2) + (edge_dim or 0), hidden_dim * 4),
@@ -145,7 +152,14 @@ class FragmentMasker(nn.Module):
         if self.gnn_encoder.edge_dim is not None:
             edge_rep_pieces.append(edge_attr)
         edge_rep = torch.cat(edge_rep_pieces, dim=-1)
-        soft_weights = torch.sigmoid(self.edge_att(edge_rep).view(-1))
+        logits = self.edge_att(edge_rep).view(-1)
+        if self.scoring_mode == "symmetric":
+            reverse_pieces = [h[dst], h[src]]
+            if self.gnn_encoder.edge_dim is not None:
+                reverse_pieces.append(reverse_fragment_edge_attr(edge_attr))
+            reverse_logits = self.edge_att(torch.cat(reverse_pieces, dim=-1)).view(-1)
+            logits = (logits + reverse_logits) * 0.5
+        soft_weights = torch.sigmoid(logits)
 
         # Top-k indices are discrete. Detaching here only isolates mask
         # construction; selected soft_weights are still passed downstream.

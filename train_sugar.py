@@ -110,6 +110,7 @@ def build_shared_initialized_views(
     """Build FragmentCIGA views from one shared initial state."""
     num_views = config.num_views
     erm_baseline = bool(config.get("erm_baseline", False))
+    selection_mode = config.get("selection_mode", "learned")
     view_fragmentation_methods = expand_view_fragmentations(config)
     uses_default_fragmentation = not uses_mixed_fragmentations(config)
     shared_view = FragmentCIGA(
@@ -128,6 +129,11 @@ def build_shared_initialized_views(
             None if uses_default_fragmentation else view_fragmentation_methods[0]
         ),
         erm_baseline=erm_baseline,
+        selection_mode=selection_mode,
+        scoring_mode=config.get("scoring_mode", "ordered"),
+        selection_budget=config.get("selection_budget", "edges"),
+        atom_retention_ratio=config.get("atom_retention_ratio", 0.65),
+        ranking_mode=config.get("ranking_mode", "learned"),
     )
     shared_initial_state = deepcopy(shared_view.state_dict())
 
@@ -153,6 +159,11 @@ def build_shared_initialized_views(
                 None if uses_default_fragmentation else view_fragmentation_methods[i]
             ),
             erm_baseline=erm_baseline,
+            selection_mode=selection_mode,
+            scoring_mode=config.get("scoring_mode", "ordered"),
+            selection_budget=config.get("selection_budget", "edges"),
+            atom_retention_ratio=config.get("atom_retention_ratio", 0.65),
+            ranking_mode=config.get("ranking_mode", "learned"),
         )
         view.load_state_dict(shared_initial_state)
         views.append(view)
@@ -217,6 +228,7 @@ def build_trainer(config, views, device):
         env_bucket_strategy=config.get("env_bucket_strategy", "value"),
         contrast_temperature=config.contrast_temperature,
         contrast_sampling=config.contrast_sampling,
+        contrast_scope=config.get('contrast_scope','pooled'),
         track_roc_auc=config.track_roc_auc,
         loss_log_path=config.get("loss_log_path", "outputs/logs/sugar_training_losses.csv"),
         aggregation_mode=config.get("aggregation_mode", config.get("aggregation", "mean")),
@@ -249,6 +261,10 @@ def apply_checkpoint_defaults(config, checkpoint_payload):
         "sampler_seed",
         "aggregation_mode",
         "erm_baseline",
+        "selection_mode",
+        "selection_budget",
+        "ranking_mode",
+        "atom_retention_ratio",
     }
     for key, value in checkpoint_config(checkpoint_payload).items():
         if key in model_shape_keys or not hasattr(config, key):
@@ -371,6 +387,10 @@ def build_final_metrics_report(
         "log_test_curve",
         "greedy_model_selection",
         "erm_baseline",
+        "selection_mode",
+        "selection_budget",
+        "ranking_mode",
+        "atom_retention_ratio",
         "edge_ratio",
         "fragment_sample_ratio",
         "epochs",

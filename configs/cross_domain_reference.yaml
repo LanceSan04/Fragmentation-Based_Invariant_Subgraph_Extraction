@@ -1,0 +1,35 @@
+# Frozen transfer study: no dataset-specific tuning or Size overrides.
+# Merged with parameter_winner_test_base.yaml; full resolved config is saved.
+epochs: 100
+num_views: 5
+hidden_dim: 128
+gnn_layers: 3
+batch_size: 64
+learning_rate: 0.0003
+dropout: 0.5
+weight_decay: 0.0
+edge_ratio: 0.5
+fragment_sample_ratio: 0.7
+lambda_contrast: 0.1
+lambda_diversity: 0.0
+lambda_irm: 0.0
+contrast_scope: pooled
+contrast_temperature: 0.1
+contrast_sampling: mul
+selection_mode: learned
+selection_budget: edges
+ranking_mode: learned
+scoring_mode: ordered
+inference_policy: independent
+aggregation_mode: mean
+early_stopping: false
+selection_ma_window: 1
+selection_weight_avg: false
+greedy_model_selection: false
+log_gradient_influence: false
+diversity_delay_epochs: 0
+diversity_ramp_epochs: 0
+strict: true
+num_workers: 4
+view_fragmentations:
+  group_graph: 5

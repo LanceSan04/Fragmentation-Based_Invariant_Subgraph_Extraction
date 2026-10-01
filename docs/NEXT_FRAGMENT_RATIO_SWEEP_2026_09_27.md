@@ -1,0 +1,21 @@
+# Next Assay training sweep: fragment ratios under independent voting
+
+**Status:** completed successfully on September 27; full results in `docs/FRAGMENT_RATIO_SWEEP_RESULTS_2026_09_27.md`. It was launched in the existing `sugar_run` tmux session. The local synthetic smoke passed before launch. No additional sweep is authorized by this approval.
+
+**Question:** with the current learned edge selector and independent-view checkpoint/inference policy, do modest changes to fragment-edge retention or training-time edge sampling improve overall OOD validation AUC? The earlier broad parameter search used a different, shared inference policy, so its optimum is not necessarily optimal here.
+
+**Discovery grid:** edge ratios 0.4, 0.5, 0.6 crossed with sample ratios 0.7, 0.9 = six configurations, including the current 0.5/0.7 reference. No 1.0 sample ratio. Two paired discovery seeds 8501–8502 yield 12 training trajectories. Choose the single highest mean overall independent validation AUC; exact ties follow fixed grid order.
+
+**Confirmation:** retrain the discovered winner and the 0.5/0.7 reference on five fresh paired seeds 8601–8605 (up to 10 trajectories). If the reference wins discovery, train only its five confirmation runs. **Maximum 22 runs × 100 epochs**, sequential on one GPU. Same five views, ordered scoring, learned fragment-edge ranking/gating, pooled contrastive coefficient 0.1, diversity/IRM zero, hidden 128, three layers, batch 64, lr 0.0003, dropout 0.5, weight decay 0, no early stopping. Independent validation picks the earliest best epoch; independent inference measures validation. No test split is loaded. All config, history, checkpoint, and AUC files are retained.
+
+**Decision:** confirmation mean paired overall validation AUC gain >= 0.005 and positive differences in >= 4/5 fresh seeds. Macro assay, within-assay and actual atom/bond retention are secondary diagnostics, not winner-selection criteria. Do not choose a favorable seed, tune on test, or change the primary metric after looking at the confirmation data. A winning validation setting still needs a fixed test evaluation plan before being claimed as improved OOD performance.
+
+**Compute:** at the measured ~12–13 minutes per 100-epoch trajectory, the maximum 22-run sweep is approximately 4.5–5.5 hours plus overhead, subject to server load. Wall-clock estimates do not terminate the approved pipeline. It runs in the existing `sugar_run` tmux pane under the verified-release launcher, after checking there is no competing project job and GPU availability. A short synthetic smoke passed locally on the prepared workflow.
+
+Entrypoint: `main.py experiment fragment-ratio-sweep`; implementation `src/experiments/fragment_ratio_sweep.py`. Planned fresh output: `~/REU_Summer_2026/outputs/assay/fragment_ratio_sweep_v1/`. Local source release is built at `outputs/releases/REU_Fragment_Ratio_Sweep_20260927_v1.zip`, manifest SHA256 `12688a8b87f289650665996fc187e66bb6452d1c9bd5f685df345a48ef4bee54`. After remote upload to a fresh `~/reu_releases/REU_Fragment_Ratio_Sweep_20260927_v1` directory and pin verification, the proposed single pipeline command in the existing `sugar_run` tmux pane is:
+
+```bash
+/home/lsantiago4/REU_Summer_2026/.venv-reu-server/bin/python /home/lsantiago4/reu_releases/REU_Fragment_Ratio_Sweep_20260927_v1/scripts/reu_remote_job.py --record-dir /home/lsantiago4/REU_Summer_2026/outputs/assay/fragment_ratio_sweep_v1/launch --gpu 1 -- fragment-ratio-sweep --processed-dir /home/lsantiago4/REU_Summer_2026/data/processed/baseline_study_v1/assay --raw-path /home/lsantiago4/REU_Summer_2026/data/raw/drugood/lbap_core_ec50_assay.json
+```
+
+The source release was uploaded to a fresh directory, manifest verified and pinned. Prelaunch inventory showed no competing project training process, idle GPU 1, and an idle `sugar_run` pane. This exact command was launched with PID 206034; `launch.json` reported `running`, and the first configuration passed five epochs. Monitor `~/REU_Summer_2026/outputs/assay/fragment_ratio_sweep_v1/launch/console.log`. At completion, the confirmation result is `~/REU_Summer_2026/outputs/assay/fragment_ratio_sweep_v1/launch/results/confirmation_summary.json`. Do not relaunch this command while the job is active; it uses a fresh record path. The approved 4.5–5.5 hour estimate is not an automatic stop time.

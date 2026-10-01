@@ -54,6 +54,7 @@ class SuGARTrainer:
         diversity_ramp_epochs=0,
         early_stopping_min_epochs=0,
         inference_policy="shared",
+        contrast_scope="pooled",
     ):
         """
         Args:
@@ -114,6 +115,9 @@ class SuGARTrainer:
         self._env_split_key_warned = False
         self.contrast_temperature = contrast_temperature
         self.contrast_sampling = contrast_sampling
+        if contrast_scope not in ('pooled','per_view'):
+            raise ValueError('contrast_scope must be pooled or per_view')
+        self.contrast_scope = contrast_scope
         self.track_roc_auc = track_roc_auc and _SKLEARN_AVAILABLE
         self.diversity_delay_epochs = int(diversity_delay_epochs)
         self.diversity_ramp_epochs = int(diversity_ramp_epochs)
@@ -179,23 +183,23 @@ class SuGARTrainer:
         components["prediction_loss"] = torch.stack(per_view_losses).sum()
 
         if self.lambda_contrast > 0:
-            all_emb = torch.cat([pv["embeddings"] for pv in per_view], dim=0)
-            all_labels = labels.repeat(len(self.views))
-            if self.contrast_sampling.lower() == "cnc":
-                y_pred = torch.cat(
-                    [pv["logits"].detach().argmax(dim=-1) for pv in per_view],
-                    dim=0,
-                )
+            if self.contrast_scope == 'per_view':
+                contrastive = torch.stack([
+                    supervised_contrastive_loss(
+                        pv['embeddings'], labels, temperature=self.contrast_temperature,
+                        sampling=self.contrast_sampling,
+                        y_pred=pv['logits'].detach().argmax(-1) if self.contrast_sampling.lower() == 'cnc' else None,
+                    ) for pv in per_view
+                ]).sum()
             else:
-                y_pred = None
-            contrastive = supervised_contrastive_loss(
-                all_emb,
-                all_labels,
-                temperature=self.contrast_temperature,
-                sampling=self.contrast_sampling,
-                y_pred=y_pred,
-            )
-            components["contrastive_loss"] = contrastive
+                contrastive = supervised_contrastive_loss(
+                    torch.cat([pv['embeddings'] for pv in per_view]),
+                    labels.repeat(len(per_view)),
+                    temperature=self.contrast_temperature, sampling=self.contrast_sampling,
+                    y_pred=torch.cat([pv['logits'].detach().argmax(-1) for pv in per_view])
+                    if self.contrast_sampling.lower() == 'cnc' else None,
+                )
+            components['contrastive_loss'] = contrastive
             components["contrastive_loss_weighted"] = self.lambda_contrast * contrastive
 
         if self.lambda_diversity > 0 and len(self.views) > 1:
@@ -479,6 +483,15 @@ class SuGARTrainer:
                 batch_env = batch.env_id.to(self.device)
 
             loss, components, _ = self._compute_components(per_view, labels, batch_env)
+
+            if step == 0 and getattr(self, 'log_gradient_influence', False):
+                self.last_gradient_report = {}
+                for group,attr in [('scorer','fragment_masker'),('classifier','atom_classifier')]:
+                    params=[p for v in self.views for p in getattr(v,attr).parameters() if p.requires_grad]
+                    for name in ['prediction_loss','contrastive_loss_weighted']:
+                        term=components[name]
+                        gradients=torch.autograd.grad(term,params,retain_graph=True,allow_unused=True) if term.requires_grad else []
+                        self.last_gradient_report[group+'_'+name]=sum(float(g.detach().square().sum()) for g in gradients if g is not None)**.5
 
             for opt in self.optimizers:
                 opt.zero_grad()

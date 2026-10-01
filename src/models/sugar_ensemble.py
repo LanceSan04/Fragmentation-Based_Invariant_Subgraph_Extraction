@@ -5,7 +5,7 @@ import math
 import torch
 import torch.nn.functional as F
 
-from src.models.fragment_ciga import topk_mask_over_eligible, restore_full_edge_outputs
+from src.models.fragment_ciga import topk_mask_over_eligible
 from src.models.fragment_graph import build_fragment_graph_batch
 from src.models.atom_reconstructor import reconstruct_batch, reconstruct_batch_fast
 
@@ -27,6 +27,11 @@ class SuGAREnsemble:
             raise ValueError("aggregation_mode must be 'mean' or 'max'")
         self.views = list(views)
         self.aggregation_mode = aggregation_mode
+        if inference_policy == 'shared' and any(
+            getattr(v, 'selection_budget', 'edges') != 'edges' or
+            getattr(v, 'ranking_mode', 'learned') != 'learned' for v in self.views
+        ):
+            raise ValueError('Atom budgets and random ranking require independent inference')
 
     @property
     def num_views(self):
@@ -77,6 +82,9 @@ class SuGAREnsemble:
             raise ValueError(
                 "_aggregate_subgraph can only aggregate views using the same fragmentation method"
             )
+        selection_modes = {getattr(view, "selection_mode", "learned") for view in views}
+        if len(selection_modes) != 1:
+            raise ValueError("Shared subgraph requires one selection mode per view group")
 
         device = batch_data.x.device
         fragment_batch = build_fragment_graph_batch(batch_data, method=method).to(device)
@@ -84,14 +92,7 @@ class SuGAREnsemble:
         all_soft_weights = []
         all_eligible_masks = []
         for view in views:
-            sampled_fragment_batch, eligible_mask = view.fragment_edge_sampler(fragment_batch)
-            sampled_edge_scores, sampled_bool_mask = view.fragment_masker(sampled_fragment_batch)
-            _, edge_scores = restore_full_edge_outputs(
-                fragment_batch.edge_index.size(1),
-                sampled_fragment_batch.full_fragment_edge_id,
-                sampled_bool_mask,
-                sampled_edge_scores,
-            )
+            edge_scores, eligible_mask = view.score_fragment_edges(fragment_batch)
             all_soft_weights.append(edge_scores)
             all_eligible_masks.append(eligible_mask)
 
@@ -108,18 +109,22 @@ class SuGAREnsemble:
             aggregate_eligible,
         )
 
+        reconstruction_weights = (
+            bool_mask.to(agg_weights.dtype)
+            if "random" in selection_modes else agg_weights
+        )
         if fast:
             atom_batch = reconstruct_batch_fast(
                 batch_data,
                 bool_mask,
-                selected_fragment_edge_weight=agg_weights,
+                selected_fragment_edge_weight=reconstruction_weights,
                 fragmentation_method=method,
             )
         else:
             atom_batch = reconstruct_batch(
                 batch_data,
                 bool_mask,
-                selected_fragment_edge_weight=agg_weights,
+                selected_fragment_edge_weight=reconstruction_weights,
                 fragmentation_method=method,
             ).to(device)
         return atom_batch, agg_weights

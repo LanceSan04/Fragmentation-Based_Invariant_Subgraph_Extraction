@@ -1,0 +1,4 @@
+# Optional local SSH client; exact versions already installed in this project venv.
+# Training-server environments do not need these packages.
+paramiko==5.0.0
+python-dotenv==1.2.1

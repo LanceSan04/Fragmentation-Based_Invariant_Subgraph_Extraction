@@ -9,13 +9,22 @@ import sys
 
 ROOT=Path(__file__).resolve().parents[2]
 WORKFLOWS={
-    'contrastive-sweep':'contrastive_sweep',
+    'selection-gating-probe':'selection_gating_probe',
+    'cross-domain':'cross_domain',
+    'contrastive-sweep':'contrastive_sweep', 'erm-tune':'erm_tune',
     'visualize-views':'visualize_views', 'tune':'parameter_search', 'benchmark':'benchmark', 'select':'selection',
+    'baseline-eval':'baseline_eval',
+    'scorer-study':'scorer_study',
+    'contrastive-study':'contrastive_study',
+    'assay-followup':'assay_followup',
+    'connectivity-probe':'connectivity_probe',
+    'fragment-ratio-sweep':'fragment_ratio_sweep',
+    'atom-budget-study':'atom_budget_study',
     'compare-inference':'inference', 'compare-views':'views',
     'diagnose':'diagnostics', 'overnight':'overnight',
     'ablation':'ablation', 'diversity':'diversity',
 }
-OUTPUT_WORKFLOWS={'tune','benchmark','select','compare-inference','compare-views','diagnose','overnight'}
+OUTPUT_WORKFLOWS={'tune','erm-tune','benchmark','select','baseline-eval','compare-inference','compare-views','diagnose','overnight'}
 
 def option(args,name,default=None):
     for i,arg in enumerate(args):
