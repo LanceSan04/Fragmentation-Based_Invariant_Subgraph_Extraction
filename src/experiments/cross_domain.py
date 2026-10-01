@@ -20,12 +20,11 @@ from src.data.config_hash import preprocessing_config_hash
 from src.data.dataloader import load_processed_split, _expected_metadata
 from src.data.good_hiv import file_sha256
 from src.data.preprocess import load_raw_dataset, run_preprocessing
-from src.experiments.baseline_eval import evaluate_saved, PARITY_TOLERANCE
+from src.experiments.checkpoints import evaluate_saved, PARITY_TOLERANCE
 from src.experiments.plans import ROOT, base_config, make_plan
 from src.experiments.selection import run_seed, write
 from src.training.checkpoint import load_checkpoint
-from train_sugar import Config
-
+from src.training.pipeline import Config
 
 DATASETS = ("ec50_scaffold", "ec50_size", "good_hiv_scaffold", "good_hiv_size")
 ARMS = ("learned", "random", "erm")
@@ -40,39 +39,61 @@ def dataset_config(dataset, raw_root, cache_root, device):
     cache = Path(cache_root).resolve() / dataset
     base = base_config("assay", cache, device)
     base.update(yaml.safe_load((ROOT / "configs/cross_domain_reference.yaml").read_text()))
-    base.update(processed_dir=str(cache), split_names=list(SPLITS),
-                loader_split_names=["train", "ood_val"], test_split=None, report_splits=[])
+    base.update(
+        processed_dir=str(cache),
+        split_names=list(SPLITS),
+        loader_split_names=["train", "ood_val"],
+        test_split=None,
+        report_splits=[],
+    )
     if dataset.startswith("ec50_"):
-        base.update(dataset=f"drugood_lbap_core_{dataset}", raw_format="drugood_json",
-                    raw_path=str(Path(raw_root).resolve() / "drugood" / f"lbap_core_{dataset}.json"))
+        base.update(
+            dataset=f"drugood_lbap_core_{dataset}",
+            raw_format="drugood_json",
+            raw_path=str(Path(raw_root).resolve() / "drugood" / f"lbap_core_{dataset}.json"),
+        )
     else:
         domain = dataset.removeprefix("good_hiv_")
-        base.update(dataset=f"good_hiv_{domain}_covariate",
-                    raw_format=f"good_hiv_{domain}_covariate_zip",
-                    raw_path=str(Path(raw_root).resolve() / "good" / "GOODHIV.zip"),
-                    molecule_id_key="molecule_id", environment_key="domain_id",
-                    metadata_keys=["good_source_id", "good_domain", "good_official_split",
-                                   "good_split_position", "good_env_id", "domain_id"])
+        base.update(
+            dataset=f"good_hiv_{domain}_covariate",
+            raw_format=f"good_hiv_{domain}_covariate_zip",
+            raw_path=str(Path(raw_root).resolve() / "good" / "GOODHIV.zip"),
+            molecule_id_key="molecule_id",
+            environment_key="domain_id",
+            metadata_keys=[
+                "good_source_id",
+                "good_domain",
+                "good_official_split",
+                "good_split_position",
+                "good_env_id",
+                "domain_id",
+            ],
+        )
     return base
 
 
 def arm_config(base, arm):
     if arm not in ARMS:
         raise ValueError(arm)
-    values = dict(base, erm_baseline=arm == "erm",
-                  selection_mode="random" if arm == "random" else "learned",
-                  inference_policy=POLICY[arm])
+    values = dict(
+        base,
+        erm_baseline=arm == "erm",
+        selection_mode="random" if arm == "random" else "learned",
+        inference_policy=POLICY[arm],
+    )
     if arm == "erm":
-        values.update(lambda_contrast=0., lambda_diversity=0., lambda_irm=0.)
+        values.update(lambda_contrast=0.0, lambda_diversity=0.0, lambda_irm=0.0)
     return values
 
 
 def cache_manifest(base):
     cache = Path(base["processed_dir"])
-    return dict(raw_path=base["raw_path"],
-                raw_sha256=file_sha256(base["raw_path"]) if base["raw_path"] else None,
-                preprocessing_config_hash=preprocessing_config_hash(Config(base)),
-                files={name: file_sha256(cache / f"{name}.pt") for name in SPLITS})
+    return dict(
+        raw_path=base["raw_path"],
+        raw_sha256=file_sha256(base["raw_path"]) if base["raw_path"] else None,
+        preprocessing_config_hash=preprocessing_config_hash(Config(base)),
+        files={name: file_sha256(cache / f"{name}.pt") for name in SPLITS},
+    )
 
 
 def prepare_cache(base):
@@ -111,14 +132,21 @@ def verify_cache(base):
 def summary(rows, split):
     def stats(values):
         values = [float(value) for value in values]
-        return dict(n=len(values), mean=statistics.mean(values),
-                    sample_std=statistics.stdev(values) if len(values) > 1 else None)
-    result = dict(arms={arm: stats([row[arm][split]["auc"] for row in rows]) for arm in ARMS},
-                  paired_differences={})
+        return dict(
+            n=len(values),
+            mean=statistics.mean(values),
+            sample_std=statistics.stdev(values) if len(values) > 1 else None,
+        )
+
+    result = dict(
+        arms={arm: stats([row[arm][split]["auc"] for row in rows]) for arm in ARMS},
+        paired_differences={},
+    )
     for other in ("random", "erm"):
         delta = [float(row["learned"][split]["auc"] - row[other][split]["auc"]) for row in rows]
         result["paired_differences"][f"learned_minus_{other}"] = dict(
-            stats(delta), values=delta, positive_seeds=sum(value > 0 for value in delta))
+            stats(delta), values=delta, positive_seeds=sum(value > 0 for value in delta)
+        )
     return result
 
 
@@ -128,19 +156,30 @@ def evaluate_frozen(entries, output, device, evaluate_test):
     for entry in entries:
         checkpoint = Path(entry["checkpoint"])
         payload = load_checkpoint(checkpoint, map_location="cpu")
-        if payload["epoch"] != entry["selected_epoch"] or payload["config"]["seed"] != entry["seed"]:
+        if (
+            payload["epoch"] != entry["selected_epoch"]
+            or payload["config"]["seed"] != entry["seed"]
+        ):
             raise ValueError("Checkpoint identity differs from selection record")
         if payload["config"]["inference_policy"] != entry["policy"]:
             raise ValueError("Checkpoint policy differs from the frozen policy")
         frozen.append(dict(entry, checkpoint_sha256=file_sha256(checkpoint)))
     write(output / "frozen_checkpoints.json", frozen)
     for entry in frozen:
-        val = evaluate_saved(entry["checkpoint"], "ood_val", entry["cache"], device,
-                             entry["policy"], entry["seed"])
+        val = evaluate_saved(
+            entry["checkpoint"], "ood_val", entry["cache"], device, entry["policy"], entry["seed"]
+        )
         delta = float(val["auc"] - entry["selected_auc"])
         passed = math.isfinite(delta) and abs(delta) <= PARITY_TOLERANCE
-        validation.append(dict(dataset=entry["dataset"], arm=entry["arm"], seed=entry["seed"],
-                               delta=delta, passed=passed))
+        validation.append(
+            dict(
+                dataset=entry["dataset"],
+                arm=entry["arm"],
+                seed=entry["seed"],
+                delta=delta,
+                passed=passed,
+            )
+        )
         write(output / "validation_parity.json", validation)
         if not passed:
             raise RuntimeError("Validation replay failed; no test split was loaded")
@@ -152,26 +191,44 @@ def evaluate_frozen(entries, output, device, evaluate_test):
     if evaluate_test:
         for entry in frozen:
             entry["metrics"]["ood_test"] = evaluate_saved(
-                entry["checkpoint"], "ood_test", entry["cache"], device,
-                entry["policy"], entry["seed"])
+                entry["checkpoint"],
+                "ood_test",
+                entry["cache"],
+                device,
+                entry["policy"],
+                entry["seed"],
+            )
             write(output / "evaluation_progress.json", frozen)
     comparisons = {}
     for dataset in dict.fromkeys(entry["dataset"] for entry in frozen):
         group = [entry for entry in frozen if entry["dataset"] == dataset]
         seeds = list(dict.fromkeys(entry["seed"] for entry in group))
-        rows = [dict(seed=seed, **{e["arm"]: e["metrics"] for e in group if e["seed"] == seed})
-                for seed in seeds]
-        comparisons[dataset] = dict(per_seed=rows,
-            summary={split: summary(rows, split) for split in (["ood_val", "ood_test"] if evaluate_test else ["ood_val"])})
-    report = dict(datasets=comparisons, policies=POLICY, test_evaluated=evaluate_test,
-                  note="Fixed Assay settings transferred without tuning; matched ERM is not a tuned best-possible baseline. Dataset test scores from earlier research may already have been inspected.")
+        rows = [
+            dict(seed=seed, **{e["arm"]: e["metrics"] for e in group if e["seed"] == seed})
+            for seed in seeds
+        ]
+        comparisons[dataset] = dict(
+            per_seed=rows,
+            summary={
+                split: summary(rows, split)
+                for split in (["ood_val", "ood_test"] if evaluate_test else ["ood_val"])
+            },
+        )
+    report = dict(
+        datasets=comparisons,
+        policies=POLICY,
+        test_evaluated=evaluate_test,
+        note="Fixed Assay settings transferred without tuning; matched ERM is not a tuned best-possible baseline. Dataset test scores from earlier research may already have been inspected.",
+    )
     write(output / "comparison.json", report)
     return report
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--datasets", choices=DATASETS, nargs="+", default=["ec50_scaffold", "ec50_size"])
+    parser.add_argument(
+        "--datasets", choices=DATASETS, nargs="+", default=["ec50_scaffold", "ec50_size"]
+    )
     parser.add_argument("--raw-root", default=str(ROOT / "data/raw"))
     parser.add_argument("--cache-root", default=str(ROOT / "data/processed/cross_domain_v1"))
     parser.add_argument("--output-dir", required=True)
@@ -191,25 +248,54 @@ def main(argv=None):
         raise FileExistsError(out)
     seeds = (8700,) if args.smoke or args.stage == "pilot" else SEEDS
     epochs = 2 if args.smoke else (1 if args.stage == "pilot" else 100)
-    bases = {name: dataset_config(name, args.raw_root, args.cache_root, args.device) for name in args.datasets}
+    bases = {
+        name: dataset_config(name, args.raw_root, args.cache_root, args.device)
+        for name in args.datasets
+    }
     for name, base in bases.items():
         base["epochs"] = epochs
         if args.smoke:
             _, fixture = make_plan(out / name, args.device, True)
-            for key in ("dataset", "raw_path", "raw_format", "splits", "label_key", "processed_dir",
-                        "strict", "batch_size", "num_workers", "pin_memory", "hidden_dim", "gnn_layers"):
+            for key in (
+                "dataset",
+                "raw_path",
+                "raw_format",
+                "splits",
+                "label_key",
+                "processed_dir",
+                "strict",
+                "batch_size",
+                "num_workers",
+                "pin_memory",
+                "hidden_dim",
+                "gnn_layers",
+            ):
                 base[key] = fixture[key]
             base.update(molecule_id_key="molecule_id", metadata_keys=[])
-    plan = dict(datasets=args.datasets, arms=ARMS, seeds=seeds, epochs=epochs, stage=args.stage,
-                training_runs=0 if args.stage == "prepare" else len(bases) * len(ARMS) * len(seeds),
-                synthetic=args.smoke, policies=POLICY, evaluate_test=args.evaluate_test,
-                early_stopping=False, configs=bases,
-                arm_rules="Random: ranking random and selected gates unity; ERM: full graph with prediction loss only, five classifiers; learned/random contrastive=0.1.",
-                selection="Highest per-epoch OOD validation AUC; earliest exact tie; independent voting for fragments; full-graph voting for ERM.")
+    plan = dict(
+        datasets=args.datasets,
+        arms=ARMS,
+        seeds=seeds,
+        epochs=epochs,
+        stage=args.stage,
+        training_runs=0 if args.stage == "prepare" else len(bases) * len(ARMS) * len(seeds),
+        synthetic=args.smoke,
+        policies=POLICY,
+        evaluate_test=args.evaluate_test,
+        early_stopping=False,
+        configs=bases,
+        arm_rules="Random: ranking random and selected gates unity; ERM: full graph with prediction loss only, five classifiers; learned/random contrastive=0.1.",
+        selection="Highest per-epoch OOD validation AUC; earliest exact tie; independent voting for fragments; full-graph voting for ERM.",
+    )
     from rdkit import rdBase
     import torch_geometric
-    plan["software"] = dict(python=sys.version, torch=torch.__version__,
-                            torch_geometric=torch_geometric.__version__, rdkit=rdBase.rdkitVersion)
+
+    plan["software"] = dict(
+        python=sys.version,
+        torch=torch.__version__,
+        torch_geometric=torch_geometric.__version__,
+        rdkit=rdBase.rdkitVersion,
+    )
     if args.dry_run:
         print(json.dumps(plan, indent=2))
         return plan
@@ -227,8 +313,15 @@ def main(argv=None):
             raise FileNotFoundError(f"Prepare this study's cache first: {cache}")
     out.mkdir(parents=True, exist_ok=False)
     write(out / "plan.json", plan)
-    source_files = [*ROOT.glob("*.py"), *(ROOT / "src").rglob("*.py"), *(ROOT / "configs").glob("*.yaml")]
-    write(out / "source_hashes.json", {p.relative_to(ROOT).as_posix(): file_sha256(p) for p in source_files})
+    source_files = [
+        *ROOT.glob("*.py"),
+        *(ROOT / "src").rglob("*.py"),
+        *(ROOT / "configs").glob("*.yaml"),
+    ]
+    write(
+        out / "source_hashes.json",
+        {p.relative_to(ROOT).as_posix(): file_sha256(p) for p in source_files},
+    )
     caches = {}
     for name, base in bases.items():
         print(f"Cache validation/preparation: {name}", flush=True)
@@ -250,20 +343,45 @@ def main(argv=None):
                 replay = result["results"][POLICY[arm]][POLICY[arm]]["ood_val"]["auc"]
                 if abs(replay - selected["auc"]) > PARITY_TOLERANCE:
                     raise RuntimeError("Restored validation AUC differs from selected AUC")
-                entries.append(dict(dataset=name, arm=arm, seed=seed, policy=POLICY[arm],
-                                    cache=base["processed_dir"], checkpoint=str(run_dir / f"best_{POLICY[arm]}.pt"),
-                                    selected_epoch=selected["epoch"], selected_auc=selected["auc"]))
-                timings.append(dict(dataset=name, arm=arm, seed=seed, epochs=epochs,
-                                    elapsed_seconds=time.monotonic() - start,
-                                    peak_cuda_allocated_bytes=torch.cuda.max_memory_allocated() if args.device == "cuda" else None))
+                entries.append(
+                    dict(
+                        dataset=name,
+                        arm=arm,
+                        seed=seed,
+                        policy=POLICY[arm],
+                        cache=base["processed_dir"],
+                        checkpoint=str(run_dir / f"best_{POLICY[arm]}.pt"),
+                        selected_epoch=selected["epoch"],
+                        selected_auc=selected["auc"],
+                    )
+                )
+                timings.append(
+                    dict(
+                        dataset=name,
+                        arm=arm,
+                        seed=seed,
+                        epochs=epochs,
+                        elapsed_seconds=time.monotonic() - start,
+                        peak_cuda_allocated_bytes=(
+                            torch.cuda.max_memory_allocated() if args.device == "cuda" else None
+                        ),
+                    )
+                )
                 write(out / "training_progress.json", entries)
                 write(out / "timings.json", timings)
     # Recheck data provenance before the validation/test evaluation phase.
     for base in bases.values():
         verify_cache(base)
     evaluate_frozen(entries, out, args.device, args.evaluate_test)
-    write(out / "complete.json", dict(complete=True, training_runs=len(entries),
-                                      test_evaluated=args.evaluate_test, synthetic=args.smoke))
+    write(
+        out / "complete.json",
+        dict(
+            complete=True,
+            training_runs=len(entries),
+            test_evaluated=args.evaluate_test,
+            synthetic=args.smoke,
+        ),
+    )
     print(f"COMPLETE: {out / 'comparison.json'}", flush=True)
 
 

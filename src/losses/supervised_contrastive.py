@@ -64,7 +64,7 @@ def supervised_contrastive_loss(
             raise ValueError("y_pred is required for 'cnc' sampling")
 
         incorrect = (y_pred != labels).float().to(device)  # [N]
-        correct = (y_pred == labels).float().to(device)    # [N]
+        correct = (y_pred == labels).float().to(device)  # [N]
 
         # Hard positive: same label AND incorrectly predicted
         hard_pos = pos_mask * incorrect.unsqueeze(1)
@@ -84,7 +84,9 @@ def supervised_contrastive_loss(
 
         pos_exp = torch.exp(logits) * hard_pos
         neg_exp = torch.exp(logits) * hard_neg
-        log_prob = logits - torch.log(pos_exp.sum(1, keepdim=True) + neg_exp.sum(1, keepdim=True) + 1e-12)
+        log_prob = logits - torch.log(
+            pos_exp.sum(1, keepdim=True) + neg_exp.sum(1, keepdim=True) + 1e-12
+        )
 
         mean_log_prob_pos = (hard_pos * log_prob).sum(1)[is_valid] / hard_pos.sum(1)[is_valid]
         return -mean_log_prob_pos.mean()

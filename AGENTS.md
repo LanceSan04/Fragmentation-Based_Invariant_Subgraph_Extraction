@@ -21,9 +21,9 @@ Local Git changes are allowed; `git push` needs explicit approval in this sessio
 
 ## Verified release and launch procedure
 
-Follow [docs/REMOTE_OPERATIONS.md](docs/REMOTE_OPERATIONS.md). Build a source-only release with scripts/reu_release.py, upload/extract into a fresh directory under the user home, and verify its expected manifest hash. Never overwrite code used by an active job. Optional SSH client dependencies are in requirements-remote.txt.
+Follow [docs/REMOTE_OPERATIONS.md](docs/REMOTE_OPERATIONS.md). Build a source-only release with tools/remote/reu_release.py, upload/extract into a fresh directory under the user home, and verify its expected manifest hash. Never overwrite code used by an active job. Optional SSH client dependencies are in requirements-remote.txt.
 
-Approved main.py experiments must use scripts/reu_remote_job.py inside tmux or the approved scheduler. Its fixed per-account advisory lock coordinates participating launchers across checkouts and sessions; manual launches can bypass it, so existing-job checks remain required. The lock is not a GPU reservation, sandbox, resource quota, or proof of user approval. Do not modify the launcher to bypass a busy lock.
+Approved main.py experiments must use tools/remote/reu_remote_job.py inside tmux or the approved scheduler. Its fixed per-account advisory lock coordinates participating launchers across checkouts and sessions; manual launches can bypass it, so existing-job checks remain required. The lock is not a GPU reservation, sandbox, resource quota, or proof of user approval. Do not modify the launcher to bypass a busy lock.
 
 One approval may cover a named sequential batch with an explicit total budget; do not ask again for each seed in that approved batch. A goal alone does not authorize unspecified remote pipelines.
 

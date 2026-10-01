@@ -14,6 +14,7 @@ import torch
 
 try:
     from sklearn.metrics import roc_auc_score as _sklearn_roc_auc
+
     _SKLEARN_AVAILABLE = True
 except ImportError:
     _SKLEARN_AVAILABLE = False

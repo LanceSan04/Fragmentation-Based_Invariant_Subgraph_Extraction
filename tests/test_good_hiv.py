@@ -1,4 +1,5 @@
 """Protect published split identity, label meaning, and graph/SMILES alignment."""
+
 import io
 from pathlib import Path
 import tempfile
@@ -31,13 +32,17 @@ class GoodHIVTests(unittest.TestCase):
                 datas = [graph("CCO", 0, start), graph("CCN", 2 if bad_label else 1, start + 1)]
                 stream = io.BytesIO()
                 torch.save(InMemoryDataset.collate(datas), stream)
-                archive.writestr(f"GOODHIV/scaffold/processed/covariate_{name}.pt", stream.getvalue())
+                archive.writestr(
+                    f"GOODHIV/scaffold/processed/covariate_{name}.pt", stream.getvalue()
+                )
         return path
 
     def test_official_val_and_test_mapping_and_source_ids(self):
         with tempfile.TemporaryDirectory() as temp:
             path = self.archive(Path(temp))
-            rows, meta = read_good_hiv_archive(path, "scaffold", ["train", "ood_val", "ood_test"], file_sha256(path))
+            rows, meta = read_good_hiv_archive(
+                path, "scaffold", ["train", "ood_val", "ood_test"], file_sha256(path)
+            )
             self.assertEqual(rows["ood_val"][0]["good_source_id"], 2)
             self.assertEqual(rows["ood_test"][0]["good_source_id"], 4)
             self.assertEqual(rows["ood_val"][0]["good_official_split"], "val")
@@ -73,7 +78,13 @@ class GoodHIVTests(unittest.TestCase):
 
     def test_preprocessor_requests_only_configured_splits(self):
         with patch("src.data.good_hiv.read_good_hiv_archive", return_value=({}, {})) as reader:
-            load_raw_dataset(dict(raw_path="official.zip", raw_format="good_hiv_size_covariate_zip", split_names=["train", "ood_val"]))
+            load_raw_dataset(
+                dict(
+                    raw_path="official.zip",
+                    raw_format="good_hiv_size_covariate_zip",
+                    split_names=["train", "ood_val"],
+                )
+            )
             reader.assert_called_once_with("official.zip", "size", ["train", "ood_val"])
 
 

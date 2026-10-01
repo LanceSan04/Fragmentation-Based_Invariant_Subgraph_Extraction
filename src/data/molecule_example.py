@@ -94,7 +94,9 @@ class MoleculeExample:
             if int(self.atom_to_fragment.min()) < 0:
                 raise ValueError("atom_to_fragment contains a negative fragment ID")
             if int(self.atom_to_fragment.max()) >= num_fragments:
-                raise ValueError("atom_to_fragment contains a fragment ID outside fragment_x_static")
+                raise ValueError(
+                    "atom_to_fragment contains a fragment ID outside fragment_x_static"
+                )
 
         if num_bonds > 0 and self.directed_edge_to_bond.numel() > 0:
             if int(self.directed_edge_to_bond.max()) >= num_bonds:
@@ -113,7 +115,9 @@ class MoleculeExample:
             if atoms.numel() == 0:
                 raise ValueError(f"fragment {fragment_id} is empty")
             if not torch.all(self.atom_to_fragment[atoms] == fragment_id):
-                raise ValueError(f"fragment_to_atoms[{fragment_id}] disagrees with atom_to_fragment")
+                raise ValueError(
+                    f"fragment_to_atoms[{fragment_id}] disagrees with atom_to_fragment"
+                )
 
         return self
 

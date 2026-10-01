@@ -22,7 +22,6 @@ selection ratio, or the DataLoader shuffle ``seed``.
 import hashlib
 import json
 
-
 PREPROCESS_CONFIG_KEYS = [
     "preprocess_version",
     "dataset",
@@ -58,11 +57,7 @@ def preprocessing_config_hash(config):
 def preprocessing_config_payload(config):
     """Return a plain dict with preprocessing-relevant config fields."""
     plain_config = _to_plain_dict(config)
-    return {
-        key: plain_config[key]
-        for key in PREPROCESS_CONFIG_KEYS
-        if key in plain_config
-    }
+    return {key: plain_config[key] for key in PREPROCESS_CONFIG_KEYS if key in plain_config}
 
 
 def _to_plain_dict(config):

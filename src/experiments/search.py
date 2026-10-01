@@ -2,7 +2,7 @@
 r"""Optuna hyperparameter search + repeat evaluation for the SuGAr pipeline.
 
 Two modes, both driven by ``configs/grid_search.yaml`` and both wrapping the
-existing ``run_training`` from ``train_sugar``:
+existing ``run_training`` from ``src.training.pipeline``:
 
   search
       Run an Optuna study that samples hyperparameters from the config ``grid``
@@ -37,23 +37,17 @@ import argparse
 import csv
 import json
 import math
-import random
 import signal
-import statistics
 import sys
 from datetime import datetime
 from pathlib import Path
-
-import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import numpy as np
-import torch
 
-from train_sugar import Config, load_config, run_training
+from src.training.pipeline import Config, load_config, run_training
 from src.training.selection_metrics import best_moving_average as _best_moving_average
 
 
@@ -89,17 +83,20 @@ def build_run_dict(base, overrides, combo, seed, run_name):
     run_dict["save_model"] = None
     run_dict["final_metrics_path"] = None
     run_dict["loss_log_path"] = None
-    run_dict["save_outputs"] = {key: False for key in (
-        "checkpoint",
-        "training_epoch_losses",
-        "final_evaluation_metrics",
-        "training_curves",
-        "preprocessing_fragmentation_diagnostics",
-        "subgraph_analysis",
-        "effective_config",
-        "run_manifest",
-        "preprocess_failures",
-    )}
+    run_dict["save_outputs"] = {
+        key: False
+        for key in (
+            "checkpoint",
+            "training_epoch_losses",
+            "final_evaluation_metrics",
+            "training_curves",
+            "preprocessing_fragmentation_diagnostics",
+            "subgraph_analysis",
+            "effective_config",
+            "run_manifest",
+            "preprocess_failures",
+        )
+    }
     # Vary randomness reproducibly per run.
     run_dict["seed"] = seed
     run_dict["sampler_seed"] = seed
@@ -121,8 +118,9 @@ def save_run_config(runs_dir, run_name, run_dict, combo, seed):
     return path
 
 
-def run_once(base, overrides, combo, seed, run_name, runs_dir, *, evaluate_test=True,
-             retain_artifacts=False):
+def run_once(
+    base, overrides, combo, seed, run_name, runs_dir, *, evaluate_test=True, retain_artifacts=False
+):
     """Name the run, save its config, train it, and return per-split metrics
     plus the per-epoch training history."""
     run_dict = build_run_dict(base, overrides, combo, seed, run_name)
@@ -130,15 +128,25 @@ def run_once(base, overrides, combo, seed, run_name, runs_dir, *, evaluate_test=
         run_dict.update(test_split=None, report_splits=[], log_test_curve=False)
     if retain_artifacts:
         run_dict["output_root"] = str(runs_dir / "artifacts")
-        for key in ("checkpoint", "training_epoch_losses", "final_evaluation_metrics",
-                    "effective_config", "run_manifest"):
+        for key in (
+            "checkpoint",
+            "training_epoch_losses",
+            "final_evaluation_metrics",
+            "effective_config",
+            "run_manifest",
+        ):
             run_dict["save_outputs"][key] = True
     save_run_config(runs_dir, run_name, run_dict, combo, seed)
     set_all_seeds(seed)
     result = run_training(Config(run_dict))
-    (runs_dir / f"{run_name}.result.json").write_text(json.dumps(
-        {"metrics": result["metrics"], "history": result.get("history", {})},
-        indent=2, default=str), encoding="utf-8")
+    (runs_dir / f"{run_name}.result.json").write_text(
+        json.dumps(
+            {"metrics": result["metrics"], "history": result.get("history", {})},
+            indent=2,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
     return result["metrics"], result.get("history", {}) or {}
 
 
@@ -178,7 +186,9 @@ def run_search(spec, base, args):
 
     grid = spec.get("grid", {}) or {}
     if "selection_ma_window" in grid:
-        raise ValueError("Set auc_ma_window in the spec; do not tune selection_ma_window separately")
+        raise ValueError(
+            "Set auc_ma_window in the spec; do not tune selection_ma_window separately"
+        )
     grid_keys = sorted(grid)
     if not grid_keys:
         raise SystemExit("`grid` is empty; nothing to search.")
@@ -197,8 +207,10 @@ def run_search(spec, base, args):
     runs_dir = out_dir / "runs"
 
     print(f"search: Optuna study of {n_trials} trial(s) x {repeats} repeat(s)")
-    print(f"  objective: mean best {ma_window}-epoch moving-average val AUC "
-          f"({'maximize' if maximize else 'minimize'})")
+    print(
+        f"  objective: mean best {ma_window}-epoch moving-average val AUC "
+        f"({'maximize' if maximize else 'minimize'})"
+    )
     print(f"  search space: { {key: grid[key] for key in grid_keys} }")
     if args.dry_run:
         print("dry-run: no training performed.")
@@ -214,8 +226,10 @@ def run_search(spec, base, args):
         if stop_requested:
             raise KeyboardInterrupt
         stop_requested = True
-        print("\n[Ctrl+C] finishing the current training run, then saving and "
-              "stopping. Press Ctrl+C again to abort immediately.")
+        print(
+            "\n[Ctrl+C] finishing the current training run, then saving and "
+            "stopping. Press Ctrl+C again to abort immediately."
+        )
 
     def objective(trial):
         combo = {key: trial.suggest_categorical(key, list(grid[key])) for key in grid_keys}
@@ -224,10 +238,16 @@ def run_search(spec, base, args):
         best_ma_scores = []
         for r in range(repeats):
             if stop_requested and best_ma_scores:
-                print(f"--- trial {trial.number}: stop requested; completed "
-                      f"{len(best_ma_scores)} of {repeats} repeat(s) ---")
+                print(
+                    f"--- trial {trial.number}: stop requested; completed "
+                    f"{len(best_ma_scores)} of {repeats} repeat(s) ---"
+                )
                 break
-            seed = base_seed + r if spec.get("common_search_seeds", False) else base_seed + trial.number * repeats + r
+            seed = (
+                base_seed + r
+                if spec.get("common_search_seeds", False)
+                else base_seed + trial.number * repeats + r
+            )
             run_name = f"search_trial{trial.number:04d}_rep{r}_seed{seed}"
             print(f"\n=== {run_name} : {combo} ===")
             # Test/report metrics are unavailable during tuning, even if the
@@ -241,15 +261,16 @@ def run_search(spec, base, args):
             if best_ma is not None:
                 print(f"    best {ma_window}-epoch moving-average val AUC: {best_ma:.4f}")
             else:
-                print(f"    no full {ma_window}-epoch window of val AUC recorded "
-                      "for this run")
+                print(f"    no full {ma_window}-epoch window of val AUC recorded " "for this run")
         ma_summary = _summarize(best_ma_scores)
         trial.set_user_attr("val_auc_best_ma_std", ma_summary["std"])
         trial.set_user_attr("val_auc_best_ma_n", ma_summary["n"])
         if ma_summary["n"] != repeats:
             raise optuna.TrialPruned("All requested repeats must have finite validation scores")
-        print(f"--- trial {trial.number}: best_ma{ma_window} val auc "
-              f"mean={ma_summary['mean']} std={ma_summary['std']} n={ma_summary['n']} ---")
+        print(
+            f"--- trial {trial.number}: best_ma{ma_window} val auc "
+            f"mean={ma_summary['mean']} std={ma_summary['std']} n={ma_summary['n']} ---"
+        )
         return ma_summary["mean"]
 
     # Persist the study to SQLite so a multi-day sweep survives crashes/reboots
@@ -266,8 +287,11 @@ def run_search(spec, base, args):
     sampler_kind = spec.get("sampler", "tpe")
     if sampler_kind not in ("tpe", "grid"):
         raise ValueError("sampler must be tpe or grid")
-    sampler = (optuna.samplers.GridSampler(grid, seed=sampler_seed) if sampler_kind == "grid"
-               else optuna.samplers.TPESampler(seed=sampler_seed))
+    sampler = (
+        optuna.samplers.GridSampler(grid, seed=sampler_seed)
+        if sampler_kind == "grid"
+        else optuna.samplers.TPESampler(seed=sampler_seed)
+    )
     storage = optuna.storages.RDBStorage(storage_url)
     study = optuna.create_study(
         study_name=study_name,
@@ -280,12 +304,16 @@ def run_search(spec, base, args):
     if existing == 0:
         for params in spec.get("enqueue_trials", []):
             if set(params) != set(grid) or any(params[k] not in grid[k] for k in grid):
-                raise ValueError("Enqueued reference must specify valid values for every grid parameter")
+                raise ValueError(
+                    "Enqueued reference must specify valid values for every grid parameter"
+                )
             study.enqueue_trial(params)
     remaining = max(0, n_trials - existing)
     if existing:
-        print(f"  resuming study '{study_name}' from {storage_url}: "
-              f"{existing} existing trial(s), running {remaining} more to reach {n_trials}")
+        print(
+            f"  resuming study '{study_name}' from {storage_url}: "
+            f"{existing} existing trial(s), running {remaining} more to reach {n_trials}"
+        )
 
     csv_path = out_dir / "leaderboard.csv"
     best_json_path = out_dir / "best_params.json"
@@ -296,11 +324,20 @@ def run_search(spec, base, args):
         after every finished trial; an interrupted sweep keeps its latest
         standings instead of only the raw study.db."""
         # Leaderboard: one row per trial with its params + objective + std/n/state.
-        fieldnames = ["trial", "state"] + grid_keys + [
-            "val_auc_best_ma_mean", "val_auc_best_ma_std", "val_auc_best_ma_n",
+        fieldnames = (
+            ["trial", "state"]
+            + grid_keys
+            + [
+                "val_auc_best_ma_mean",
+                "val_auc_best_ma_std",
+                "val_auc_best_ma_n",
+            ]
+        )
+        completed = [
+            t
+            for t in snapshot_study.trials
+            if t.state == optuna.trial.TrialState.COMPLETE and t.value is not None
         ]
-        completed = [t for t in snapshot_study.trials
-                     if t.state == optuna.trial.TrialState.COMPLETE and t.value is not None]
         completed.sort(key=lambda t: t.value, reverse=maximize)
         ordered = completed + [t for t in snapshot_study.trials if t not in completed]
         with csv_path.open("w", newline="", encoding="utf-8") as handle:
@@ -330,8 +367,9 @@ def run_search(spec, base, args):
             "base_config": spec.get("_base_config_path"),
             "created_at": datetime.now().isoformat(timespec="seconds"),
         }
-        best_json_path.write_text(json.dumps(best_params, indent=2, sort_keys=True),
-                                  encoding="utf-8")
+        best_json_path.write_text(
+            json.dumps(best_params, indent=2, sort_keys=True), encoding="utf-8"
+        )
 
     def stop_when_requested(cb_study, _frozen_trial=None):
         if stop_requested:
@@ -339,15 +377,18 @@ def run_search(spec, base, args):
 
     previous_sigint = signal.signal(signal.SIGINT, handle_sigint)
     try:
-        study.optimize(objective, n_trials=remaining,
-                       callbacks=[write_snapshot, stop_when_requested])
+        study.optimize(
+            objective, n_trials=remaining, callbacks=[write_snapshot, stop_when_requested]
+        )
     finally:
         signal.signal(signal.SIGINT, previous_sigint)
     # Covers remaining == 0 (pure resume/report run, where no callback fires).
     write_snapshot(study)
     if stop_requested:
-        print(f"\nStopped early at {len(study.trials)} of {n_trials} trial(s); "
-              "re-run the same command to resume.")
+        print(
+            f"\nStopped early at {len(study.trials)} of {n_trials} trial(s); "
+            "re-run the same command to resume."
+        )
 
     print(f"\nWrote leaderboard: {csv_path}")
     print(f"Saved per-run configs under: {runs_dir}")
@@ -358,8 +399,10 @@ def run_search(spec, base, args):
         return
     best = study.best_trial
     print(f"Wrote best params: {best_json_path}")
-    print(f"Best trial {best.number}: best_ma{ma_window} val auc={best.value} "
-          f"params={best.params}")
+    print(
+        f"Best trial {best.number}: best_ma{ma_window} val auc={best.value} "
+        f"params={best.params}"
+    )
     storage.remove_session()
     storage.engine.dispose()
 
@@ -420,8 +463,7 @@ def run_eval(spec, base, args):
     effective.update(combo)
     validation_split = effective.get("validation_split", effective.get("valid_split"))
     report_splits = [
-        split for split in (effective.get("report_splits", []) or [])
-        if split != test_split
+        split for split in (effective.get("report_splits", []) or []) if split != test_split
     ]
     # Report the split selection was made on as well, so the val -> test gap is
     # recorded for the final runs instead of only living in the search leaderboard.
@@ -445,11 +487,20 @@ def run_eval(spec, base, args):
         seed = base_seed + r
         run_name = f"eval_run{r:02d}_seed{seed}"
         print(f"\n=== {run_name} ===")
-        metrics, _history = run_once(base, overrides, combo, seed, run_name, runs_dir,
-                                     retain_artifacts=bool(spec.get("retain_eval_artifacts", False)))
+        metrics, _history = run_once(
+            base,
+            overrides,
+            combo,
+            seed,
+            run_name,
+            runs_dir,
+            retain_artifacts=bool(spec.get("retain_eval_artifacts", False)),
+        )
         auc = (metrics.get(test_split) or {}).get("auc")
         if auc is None or not math.isfinite(float(auc)):
-            raise RuntimeError(f"Missing/nonfinite {test_split} AUC for {run_name}; inspect its saved result")
+            raise RuntimeError(
+                f"Missing/nonfinite {test_split} AUC for {run_name}; inspect its saved result"
+            )
         run_record = {"run_name": run_name, "seed": seed}
         for split in eval_splits:
             split_metrics = metrics.get(split, {}) or {}
@@ -484,8 +535,10 @@ def run_eval(spec, base, args):
     print("\n=== per-run test results ===")
     for record in per_run:
         test_record = record[test_split]
-        print(f"  {record['run_name']}: acc={test_record['acc']} auc={test_record['auc']} "
-              f"loss={test_record['loss']}")
+        print(
+            f"  {record['run_name']}: acc={test_record['acc']} auc={test_record['auc']} "
+            f"loss={test_record['loss']}"
+        )
     print(f"\n=== {test_split} summary over {runs} run(s) ===")
     for key in ("auc", "acc", "loss"):
         stats = summary[test_split][key]
@@ -508,19 +561,24 @@ def build_parser():
     common.add_argument("--config", default="configs/grid_search.yaml")
     common.add_argument("--epochs", type=int, help="Override epochs for every run.")
     common.add_argument("--device", help="Override device (cuda|cpu) for every run.")
-    common.add_argument("--dry-run", action="store_true",
-                        help="Describe the work without training.")
+    common.add_argument(
+        "--dry-run", action="store_true", help="Describe the work without training."
+    )
 
-    search = subparsers.add_parser("search", parents=[common],
-                                   help="Optuna study; record validation metric + best params.")
+    search = subparsers.add_parser(
+        "search", parents=[common], help="Optuna study; record validation metric + best params."
+    )
     search.add_argument("--trials", type=int, help="Number of Optuna trials (overrides spec).")
     search.add_argument("--repeats", type=int, help="Runs per trial (overrides spec).")
     search.set_defaults(func=run_search)
 
-    evaluate = subparsers.add_parser("eval", parents=[common],
-                                     help="Run the chosen config N times; record test mean/std.")
+    evaluate = subparsers.add_parser(
+        "eval", parents=[common], help="Run the chosen config N times; record test mean/std."
+    )
     evaluate.add_argument("--runs", type=int, help="Number of eval runs (overrides spec).")
-    evaluate.add_argument("--params", help="Path to a params JSON (default: search/best_params.json).")
+    evaluate.add_argument(
+        "--params", help="Path to a params JSON (default: search/best_params.json)."
+    )
     evaluate.set_defaults(func=run_eval)
 
     return parser

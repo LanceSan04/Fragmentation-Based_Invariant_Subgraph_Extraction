@@ -11,7 +11,6 @@ from dataclasses import dataclass
 import torch
 from rdkit import Chem
 
-
 MAX_ATOMIC_NUM = 100
 # Compact atomic-number encoding over the elements that actually occur in
 # drug-like molecules (DrugOOD/OGB scale) instead of a 100-way one-hot. The
@@ -20,17 +19,17 @@ MAX_ATOMIC_NUM = 100
 # bottleneck. Uncommon elements fall into the onek_encoding_unk overflow slot.
 DRUG_LIKE_ELEMENTS = [1, 5, 6, 7, 8, 9, 14, 15, 16, 17, 34, 35, 53]
 ATOM_FEATURES = {
-    'atomic_num': DRUG_LIKE_ELEMENTS,
-    'degree': [0, 1, 2, 3, 4, 5],
-    'formal_charge': [-1, -2, 1, 2, 0],
-    'chiral_tag': [0, 1, 2, 3],
-    'num_Hs': [0, 1, 2, 3, 4],
-    'hybridization': [
+    "atomic_num": DRUG_LIKE_ELEMENTS,
+    "degree": [0, 1, 2, 3, 4, 5],
+    "formal_charge": [-1, -2, 1, 2, 0],
+    "chiral_tag": [0, 1, 2, 3],
+    "num_Hs": [0, 1, 2, 3, 4],
+    "hybridization": [
         Chem.rdchem.HybridizationType.SP,
         Chem.rdchem.HybridizationType.SP2,
         Chem.rdchem.HybridizationType.SP3,
         Chem.rdchem.HybridizationType.SP3D,
-        Chem.rdchem.HybridizationType.SP3D2
+        Chem.rdchem.HybridizationType.SP3D2,
     ],
 }
 
@@ -80,8 +79,7 @@ class AtomGraphData:
 
         if self.bond_index.shape != (2, self.num_bonds):
             raise ValueError(
-                "bond_index must have shape [2, num_bonds], "
-                f"got {tuple(self.bond_index.shape)}"
+                "bond_index must have shape [2, num_bonds], " f"got {tuple(self.bond_index.shape)}"
             )
 
         if self.bond_attr.dim() != 2 or self.bond_attr.size(1) != BOND_FDIM:
@@ -158,14 +156,16 @@ def atom_features(atom: Chem.rdchem.Atom, functional_groups=None):
     :param functional_groups: A k-hot vector indicating the functional groups the atom belongs to.
     :return: A list containing the atom features.
     """
-    features = onek_encoding_unk(atom.GetAtomicNum(), ATOM_FEATURES['atomic_num']) + \
-               onek_encoding_unk(atom.GetTotalDegree(), ATOM_FEATURES['degree']) + \
-               onek_encoding_unk(atom.GetFormalCharge(), ATOM_FEATURES['formal_charge']) + \
-               onek_encoding_unk(int(atom.GetChiralTag()), ATOM_FEATURES['chiral_tag']) + \
-               onek_encoding_unk(int(atom.GetTotalNumHs()), ATOM_FEATURES['num_Hs']) + \
-               onek_encoding_unk(int(atom.GetHybridization()), ATOM_FEATURES['hybridization']) + \
-               [1 if atom.GetIsAromatic() else 0] + \
-               [atom.GetMass() * 0.01]  # scaled to about the same range as other features
+    features = (
+        onek_encoding_unk(atom.GetAtomicNum(), ATOM_FEATURES["atomic_num"])
+        + onek_encoding_unk(atom.GetTotalDegree(), ATOM_FEATURES["degree"])
+        + onek_encoding_unk(atom.GetFormalCharge(), ATOM_FEATURES["formal_charge"])
+        + onek_encoding_unk(int(atom.GetChiralTag()), ATOM_FEATURES["chiral_tag"])
+        + onek_encoding_unk(int(atom.GetTotalNumHs()), ATOM_FEATURES["num_Hs"])
+        + onek_encoding_unk(int(atom.GetHybridization()), ATOM_FEATURES["hybridization"])
+        + [1 if atom.GetIsAromatic() else 0]
+        + [atom.GetMass() * 0.01]
+    )  # scaled to about the same range as other features
     if functional_groups is not None:
         features += functional_groups
     return features
@@ -189,7 +189,7 @@ def bond_features(bond: Chem.rdchem.Bond):
             bt == Chem.rdchem.BondType.TRIPLE,
             bt == Chem.rdchem.BondType.AROMATIC,
             (bond.GetIsConjugated() if bt is not None else 0),
-            (bond.IsInRing() if bt is not None else 0)
+            (bond.IsInRing() if bt is not None else 0),
         ]
         fbond += onek_encoding_unk(int(bond.GetStereo()), list(range(6)))
     return fbond

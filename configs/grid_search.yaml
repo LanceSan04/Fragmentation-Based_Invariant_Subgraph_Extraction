@@ -1,4 +1,4 @@
-# Optuna hyperparameter search + repeat-eval spec for scripts/grid_search.py.
+# Optuna hyperparameter search + repeat-eval spec for python main.py search / search-eval.
 #
 # Two modes share this file:
 #   search  -> runs an Optuna study that samples hyperparameters from `grid`

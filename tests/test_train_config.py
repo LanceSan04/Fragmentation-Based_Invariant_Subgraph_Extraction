@@ -1,4 +1,4 @@
-"""Tests for train_sugar.py config/CLI merging.
+"""Tests for training-pipeline config/CLI merging.
 
 Run this file from the repository root with:
 
@@ -17,7 +17,7 @@ import torch
 from torch.optim import Adam
 
 from src.data.config_hash import preprocessing_config_hash
-from train_sugar import (
+from src.training.pipeline import (
     Config,
     build_shared_initialized_views,
     merge_config_and_cli,
@@ -114,11 +114,13 @@ class TrainConfigTests(unittest.TestCase):
             parser = build_parser()
             args = parser.parse_args(["full", "--config", config_path])
 
-            with patch("src.data.preprocess.run_preprocessing") as preprocess, \
-                patch("main.run_training") as train, \
-                patch("main.run_fragment_diagnostics") as fragment_diagnostics, \
-                patch("main.run_loss_diagnostics") as loss_diagnostics, \
-                patch("main.run_subgraph_diagnostics") as subgraph_diagnostics:
+            with patch("src.data.preprocess.run_preprocessing") as preprocess, patch(
+                "main.run_training"
+            ) as train, patch("main.run_fragment_diagnostics") as fragment_diagnostics, patch(
+                "main.run_loss_diagnostics"
+            ) as loss_diagnostics, patch(
+                "main.run_subgraph_diagnostics"
+            ) as subgraph_diagnostics:
                 train.return_value = {"history": {}, "metrics": {}}
 
                 run_full_command(args)
@@ -166,11 +168,13 @@ class TrainConfigTests(unittest.TestCase):
                 ]
             )
 
-            with patch("src.data.preprocess.run_preprocessing") as preprocess, \
-                patch("main.run_training") as train, \
-                patch("main.run_fragment_diagnostics") as fragment_diagnostics, \
-                patch("main.run_loss_diagnostics") as loss_diagnostics, \
-                patch("main.run_subgraph_diagnostics") as subgraph_diagnostics:
+            with patch("src.data.preprocess.run_preprocessing") as preprocess, patch(
+                "main.run_training"
+            ) as train, patch("main.run_fragment_diagnostics") as fragment_diagnostics, patch(
+                "main.run_loss_diagnostics"
+            ) as loss_diagnostics, patch(
+                "main.run_subgraph_diagnostics"
+            ) as subgraph_diagnostics:
                 train.return_value = {"history": {}, "metrics": {}}
 
                 run_full_command(args)

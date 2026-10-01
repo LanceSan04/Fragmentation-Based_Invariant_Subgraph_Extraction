@@ -179,9 +179,11 @@ def load_raw_dataset(config):
     raw_format = str(_config_get(config, "raw_format", "") or "").lower()
     if raw_format in {"good_hiv_scaffold_covariate_zip", "good_hiv_size_covariate_zip"}:
         from src.data.good_hiv import read_good_hiv_archive
+
         domain = "scaffold" if "scaffold" in raw_format else "size"
-        return read_good_hiv_archive(raw_path, domain,
-                                    _config_get(config, "split_names", ["train", "ood_val", "ood_test"]))
+        return read_good_hiv_archive(
+            raw_path, domain, _config_get(config, "split_names", ["train", "ood_val", "ood_test"])
+        )
     if raw_path is not None and osp.splitext(raw_path)[1].lower() == ".json":
         with open(raw_path, encoding="utf-8") as handle:
             payload = json.load(handle)
@@ -257,8 +259,7 @@ def process_record(record, config, split_name=None, split_index=None):
     extra_fragmenters = None
     if uses_mixed_fragmentations(config):
         extra_fragmenters = {
-            method: build_fragmenter(method)
-            for method in unique_fragmentation_methods(config)
+            method: build_fragmenter(method) for method in unique_fragmentation_methods(config)
         }
 
     example = build_molecule_example(
@@ -316,7 +317,9 @@ def process_split(records, config, split_name=None):
         try:
             if _should_debug_record(config, index, len(records)):
                 _debug_print(config, f"Record {index + 1}/{len(records)}")
-            examples.append(process_record(record, config, split_name=split_name, split_index=index))
+            examples.append(
+                process_record(record, config, split_name=split_name, split_index=index)
+            )
         except Exception as exc:
             if strict:
                 raise
@@ -347,10 +350,7 @@ def save_processed_split(examples, metadata, output_path, config=None):
     if config is not None:
         _debug_print(config, f"Saving {len(examples)} molecules to {output_path}")
     os.makedirs(osp.dirname(output_path), exist_ok=True)
-    molecule_data = [
-        molecule_example_to_data(example)
-        for example in examples
-    ]
+    molecule_data = [molecule_example_to_data(example) for example in examples]
     torch.save(
         {
             "metadata": metadata,
@@ -471,7 +471,9 @@ def split_records_by_ratio(records, config):
         {"train": 0.8, "valid": 0.1, "test": 0.1},
     )
     if not isinstance(ratios, dict):
-        raise ValueError("split_ratios must be a mapping such as {train: 0.8, valid: 0.1, test: 0.1}")
+        raise ValueError(
+            "split_ratios must be a mapping such as {train: 0.8, valid: 0.1, test: 0.1}"
+        )
 
     split_names = list(ratios.keys())
     if not split_names:

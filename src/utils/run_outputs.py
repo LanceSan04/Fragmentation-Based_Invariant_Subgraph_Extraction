@@ -9,7 +9,6 @@ import yaml
 
 from src.fragmentation.multi_view import fragmentation_recipe_label, unique_fragmentation_methods
 
-
 OUTPUT_TOGGLE_KEYS = {
     "checkpoint": ("save_model",),
     "training_epoch_losses": ("loss_log_path",),
@@ -28,11 +27,7 @@ def config_to_dict(config):
         return {}
     if isinstance(config, dict):
         return dict(config)
-    return {
-        key: value
-        for key, value in vars(config).items()
-        if not key.startswith("_")
-    }
+    return {key: value for key, value in vars(config).items() if not key.startswith("_")}
 
 
 def set_config_value(config, key, value):
@@ -117,7 +112,10 @@ def resolve_run_directory(config, command_name="run"):
     default_paths = {
         "checkpoint": ("save_model", run_dir / "checkpoints" / "best_model.pt"),
         "training_epoch_losses": ("loss_log_path", run_dir / "training_epoch_losses.csv"),
-        "final_evaluation_metrics": ("final_metrics_path", run_dir / "final_evaluation_metrics.json"),
+        "final_evaluation_metrics": (
+            "final_metrics_path",
+            run_dir / "final_evaluation_metrics.json",
+        ),
         "training_curves": ("training_diagnostics_dir", run_dir / "training_curves"),
         "preprocessing_fragmentation_diagnostics": (
             "fragmentation_diagnostics_dir",

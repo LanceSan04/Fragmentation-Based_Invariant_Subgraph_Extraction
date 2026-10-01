@@ -70,7 +70,14 @@ class SimpleGAT(nn.Module):
         for i in range(num_layers):
             in_dim = input_dim if i == 0 else hidden_dim
             self.convs.append(
-                GATv2Conv(in_dim, hidden_dim, heads=heads, concat=False, dropout=dropout, edge_dim=edge_dim)
+                GATv2Conv(
+                    in_dim,
+                    hidden_dim,
+                    heads=heads,
+                    concat=False,
+                    dropout=dropout,
+                    edge_dim=edge_dim,
+                )
             )
             self.bns.append(nn.BatchNorm1d(hidden_dim))
 

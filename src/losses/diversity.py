@@ -55,7 +55,7 @@ def pairwise_diversity_loss(
 
     Returns:
         Scalar loss in [0, 1]: mean non-negative per-molecule cosine across all
-        view pairs. 
+        view pairs.
     """
     V = len(fragment_scores)
     if V < 2:

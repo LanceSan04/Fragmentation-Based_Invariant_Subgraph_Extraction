@@ -5,7 +5,6 @@ from pathlib import Path
 
 import torch
 
-
 CHECKPOINT_VERSION = "0.1"
 
 
@@ -15,11 +14,7 @@ def config_to_dict(config):
         return {}
     if isinstance(config, dict):
         return dict(config)
-    return {
-        key: value
-        for key, value in vars(config).items()
-        if not key.startswith("_")
-    }
+    return {key: value for key, value in vars(config).items() if not key.startswith("_")}
 
 
 def feature_dims_dict(atom_feat_dim, fragment_feat_dim, atom_edge_dim, fragment_edge_dim):
@@ -57,13 +52,10 @@ def save_training_checkpoint(
         "config": config_to_dict(config),
         "feature_dims": dict(feature_dims or {}),
         "view_state_dicts": {
-            int(index): deepcopy(view.state_dict())
-            for index, view in enumerate(trainer.views)
+            int(index): deepcopy(view.state_dict()) for index, view in enumerate(trainer.views)
         },
         "selected_view_indices": (
-            list(selected_view_indices)
-            if selected_view_indices is not None
-            else None
+            list(selected_view_indices) if selected_view_indices is not None else None
         ),
         "history": history,
         "metrics": metrics or {},
@@ -98,10 +90,7 @@ def view_state_dicts_from_checkpoint(payload):
     else:
         raise ValueError("Checkpoint payload must be a dictionary")
 
-    return {
-        int(index): state_dict
-        for index, state_dict in view_state_dicts.items()
-    }
+    return {int(index): state_dict for index, state_dict in view_state_dicts.items()}
 
 
 def load_view_state_dicts(views, payload, strict=True):

@@ -21,7 +21,6 @@ from src.fragmentation.base import (
     validate_fragmentation,
 )
 
-
 RECAP_FRAGMENT_TYPE = "recap"
 
 
@@ -129,8 +128,7 @@ def recap_fragment_atom_sets(mol):
     """Return connected atom components after removing RECAP boundary bonds."""
     broken_bonds = find_recap_bonds(mol)
     broken_pairs = {
-        tuple(sorted((src_atom, dst_atom)))
-        for _, src_atom, dst_atom, _ in broken_bonds
+        tuple(sorted((src_atom, dst_atom))) for _, src_atom, dst_atom, _ in broken_bonds
     }
 
     adjacency = {atom.GetIdx(): set() for atom in mol.GetAtoms()}
@@ -182,10 +180,7 @@ def find_recap_bonds(mol):
                     (bond_id, src_atom, dst_atom, rule_name),
                 )
 
-    return [
-        broken_by_bond_id[bond_id]
-        for bond_id in sorted(broken_by_bond_id)
-    ]
+    return [broken_by_bond_id[bond_id] for bond_id in sorted(broken_by_bond_id)]
 
 
 def compiled_recap_queries():

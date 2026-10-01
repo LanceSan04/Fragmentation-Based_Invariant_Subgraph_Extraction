@@ -1,0 +1,6 @@
+# Normalize line endings in the repository (files had mixed CRLF/LF).
+* text=auto
+*.png binary
+*.pt binary
+*.zip binary
+*.pdf binary

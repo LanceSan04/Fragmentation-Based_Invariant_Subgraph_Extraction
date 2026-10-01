@@ -8,7 +8,6 @@ import math
 import unittest
 
 import torch
-import torch.nn.functional as F
 from torch_geometric.data import Batch
 
 from src.data.molecule_example import build_molecule_example
@@ -19,10 +18,10 @@ from src.models.sugar_ensemble import SuGAREnsemble
 from src.losses.prediction import prediction_loss
 from src.losses.diversity import pairwise_diversity_loss
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _build_batch(*smiles_labels):
     fragmenter = build_fragmenter("group_graph")
@@ -88,6 +87,7 @@ def _make_ensemble(batch, num_views=1, aggregation_mode="mean"):
 # Stage 2: _aggregate_weights
 # ---------------------------------------------------------------------------
 
+
 class AggregateWeightsTests(unittest.TestCase):
     """Unit-test _aggregate_weights in isolation via a minimal SuGAREnsemble."""
 
@@ -127,10 +127,12 @@ class AggregateWeightsTests(unittest.TestCase):
         model_mean = _make_ensemble(self.batch, num_views=2, aggregation_mode="mean")
         model_max = _make_ensemble(self.batch, num_views=2, aggregation_mode="max")
         w = torch.rand(5)
-        self.assertTrue(torch.allclose(
-            model_mean._aggregate_weights([w, w]),
-            model_max._aggregate_weights([w, w]),
-        ))
+        self.assertTrue(
+            torch.allclose(
+                model_mean._aggregate_weights([w, w]),
+                model_max._aggregate_weights([w, w]),
+            )
+        )
 
     def test_invalid_aggregation_mode_raises(self):
         with self.assertRaises(ValueError):
@@ -140,6 +142,7 @@ class AggregateWeightsTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Stage 3: soft voting output properties
 # ---------------------------------------------------------------------------
+
 
 class SoftVoteOutputTests(unittest.TestCase):
     """Validate that __call__ produces valid log-probabilities via soft vote."""
@@ -163,8 +166,10 @@ class SoftVoteOutputTests(unittest.TestCase):
             out = model(self.batch)
         self.assertTrue((out <= 0).all(), "log-probs must be ≤ 0")
         row_sums = out.exp().sum(dim=1)
-        self.assertTrue(torch.allclose(row_sums, torch.ones(3), atol=1e-5),
-                        f"exp(log-probs) row sums: {row_sums}")
+        self.assertTrue(
+            torch.allclose(row_sums, torch.ones(3), atol=1e-5),
+            f"exp(log-probs) row sums: {row_sums}",
+        )
 
     def test_mean_and_max_modes_both_produce_valid_log_probs(self):
         for mode in ("mean", "max"):
@@ -249,6 +254,7 @@ class SoftVoteOutputTests(unittest.TestCase):
 # Prediction loss (NLLLoss) compatibility
 # ---------------------------------------------------------------------------
 
+
 class PredictionLossTests(unittest.TestCase):
     """prediction_loss must accept log-probs from the ensemble and backpropagate."""
 
@@ -277,10 +283,12 @@ class PredictionLossTests(unittest.TestCase):
     def test_prediction_loss_zero_for_perfect_predictions(self):
         """If model is certain and correct, NLL loss ≈ 0."""
         labels = torch.tensor([0, 1])
-        log_probs = torch.tensor([
-            [math.log(1 - 1e-7), math.log(1e-7)],
-            [math.log(1e-7), math.log(1 - 1e-7)],
-        ])
+        log_probs = torch.tensor(
+            [
+                [math.log(1 - 1e-7), math.log(1e-7)],
+                [math.log(1e-7), math.log(1 - 1e-7)],
+            ]
+        )
         loss = prediction_loss(log_probs, labels)
         self.assertAlmostEqual(float(loss), 0.0, places=5)
 
@@ -299,8 +307,9 @@ class PredictionLossTests(unittest.TestCase):
             for p in model.views[0].fragment_masker.edge_att.parameters()
             if p.grad is not None
         )
-        self.assertGreater(masker_grad, 0.0,
-                           "gradient must reach the fragment masker edge_att parameters")
+        self.assertGreater(
+            masker_grad, 0.0, "gradient must reach the fragment masker edge_att parameters"
+        )
 
     def test_prediction_loss_backpropagates_for_max_aggregation(self):
         model = _make_ensemble(self.batch, num_views=2, aggregation_mode="max")
@@ -323,6 +332,7 @@ class PredictionLossTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Diversity loss compatibility with FragmentCIGA intermediates
 # ---------------------------------------------------------------------------
+
 
 class DiversityLossTests(unittest.TestCase):
     """pairwise_diversity_loss must work with fragment_scores from FragmentCIGA."""

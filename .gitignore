@@ -234,3 +234,11 @@ __marimo__/
 /final_testing_outputs/
 /logs/
 /temp/
+
+# Local research notes, protocols and result write-ups (kept out of git)
+docs/
+
+# Private agent instructions, skills and server tooling (local only).
+/AGENTS.md
+/skills/
+/tools/

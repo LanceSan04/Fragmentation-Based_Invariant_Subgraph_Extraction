@@ -165,9 +165,7 @@ def fragment_smiles_from_atom_sets(mol, fragment_to_atoms):
     fragment_smiles = []
     for atoms in fragment_to_atoms:
         atom_ids = torch.as_tensor(atoms, dtype=torch.long).tolist()
-        fragment_smiles.append(
-            mol_fragment_to_smiles(mol, atom_ids)
-        )
+        fragment_smiles.append(mol_fragment_to_smiles(mol, atom_ids))
     return fragment_smiles
 
 

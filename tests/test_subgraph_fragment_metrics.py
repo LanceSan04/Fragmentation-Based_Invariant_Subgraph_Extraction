@@ -1,12 +1,12 @@
 import unittest
 from pathlib import Path
 
-from scripts.analyze_subgraphs import (
+from src.analysis.subgraphs import (
     build_fragment_interpretation_tables,
     build_fragment_selection_metric_rows,
     resolve_subgraph_analysis_options,
 )
-from train_sugar import Config
+from src.training.pipeline import Config
 
 
 class SubgraphFragmentMetricTests(unittest.TestCase):
@@ -103,7 +103,8 @@ class SubgraphFragmentMetricTests(unittest.TestCase):
         fragment_rows, edge_rows = build_fragment_selection_metric_rows(records)
 
         label_one_carbonyl_any = next(
-            row for row in fragment_rows
+            row
+            for row in fragment_rows
             if row["label"] == "1"
             and row["selection_source"] == "any_view"
             and row["fragment_type"] == "frag"
@@ -114,7 +115,8 @@ class SubgraphFragmentMetricTests(unittest.TestCase):
         self.assertEqual(label_one_carbonyl_any["selection_rate"], 1.0)
 
         label_zero_carbonyl_any = next(
-            row for row in fragment_rows
+            row
+            for row in fragment_rows
             if row["label"] == "0"
             and row["selection_source"] == "any_view"
             and row["fragment_type"] == "frag"
@@ -125,7 +127,8 @@ class SubgraphFragmentMetricTests(unittest.TestCase):
         self.assertEqual(label_zero_carbonyl_any["selection_rate"], 0.0)
 
         label_one_pair_any = next(
-            row for row in edge_rows
+            row
+            for row in edge_rows
             if row["label"] == "1"
             and row["selection_source"] == "any_view"
             and {row["fragment_a_smiles"], row["fragment_b_smiles"]} == {"C=O", "N"}
@@ -160,8 +163,7 @@ class SubgraphFragmentMetricTests(unittest.TestCase):
 
         _, edge_rows = build_fragment_selection_metric_rows(records)
         view_zero_rows = [
-            row for row in edge_rows
-            if row["label"] == "1" and row["selection_source"] == "view_0"
+            row for row in edge_rows if row["label"] == "1" and row["selection_source"] == "view_0"
         ]
 
         self.assertEqual(len(view_zero_rows), 1)
@@ -202,7 +204,8 @@ class SubgraphFragmentMetricTests(unittest.TestCase):
         fragment_rows, edge_rows = build_fragment_selection_metric_rows(records)
 
         group_graph_any = next(
-            row for row in fragment_rows
+            row
+            for row in fragment_rows
             if row["fragmentation_method"] == "group_graph"
             and row["selection_source"] == "any_view"
             and row["fragment_smiles"] == "C=O"
@@ -210,7 +213,8 @@ class SubgraphFragmentMetricTests(unittest.TestCase):
         self.assertEqual(group_graph_any["selected_count"], 1)
 
         brics_any_carbonyl = next(
-            row for row in fragment_rows
+            row
+            for row in fragment_rows
             if row["fragmentation_method"] == "brics"
             and row["selection_source"] == "any_view"
             and row["fragment_smiles"] == "C=O"
@@ -218,7 +222,8 @@ class SubgraphFragmentMetricTests(unittest.TestCase):
         self.assertEqual(brics_any_carbonyl["selected_count"], 0)
 
         brics_aggregated_carbonyl = next(
-            row for row in fragment_rows
+            row
+            for row in fragment_rows
             if row["fragmentation_method"] == "brics"
             and row["selection_source"] == "aggregated"
             and row["fragment_smiles"] == "C=O"
@@ -226,7 +231,8 @@ class SubgraphFragmentMetricTests(unittest.TestCase):
         self.assertEqual(brics_aggregated_carbonyl["selected_count"], 1)
 
         brics_view_sources = {
-            row["selection_source"] for row in fragment_rows
+            row["selection_source"]
+            for row in fragment_rows
             if row["fragmentation_method"] == "brics"
         }
         self.assertEqual(
@@ -236,16 +242,17 @@ class SubgraphFragmentMetricTests(unittest.TestCase):
         self.assertNotIn("view_0", brics_view_sources)
 
         group_graph_pair = next(
-            row for row in edge_rows
+            row
+            for row in edge_rows
             if row["fragmentation_method"] == "group_graph"
             and row["selection_source"] == "aggregated"
         )
         self.assertEqual(group_graph_pair["selected_count"], 1)
 
         brics_pair = next(
-            row for row in edge_rows
-            if row["fragmentation_method"] == "brics"
-            and row["selection_source"] == "aggregated"
+            row
+            for row in edge_rows
+            if row["fragmentation_method"] == "brics" and row["selection_source"] == "aggregated"
         )
         self.assertEqual(brics_pair["selected_count"], 0)
 

@@ -5,7 +5,6 @@ import torch.nn as nn
 from src.data.atom_graph import ATOM_FDIM, BOND_FDIM
 from src.models.gnn_encoders import SimpleGNN
 
-
 FRAGMENT_EDGE_DIM = (2 * ATOM_FDIM) + BOND_FDIM + 2
 
 

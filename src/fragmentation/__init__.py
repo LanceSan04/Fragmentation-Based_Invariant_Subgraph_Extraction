@@ -4,7 +4,6 @@ from src.fragmentation.brics import BRICSFragmenter
 from src.fragmentation.group_graph import GroupGraphFragmenter
 from src.fragmentation.recap import RECAPFragmenter
 
-
 FRAGMENTERS = {
     "group_graph": GroupGraphFragmenter,
     "brics": BRICSFragmenter,

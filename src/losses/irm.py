@@ -49,11 +49,9 @@ def invariant_risk_loss(causal_pred, labels, batch_env_idx, criterion=F.cross_en
             env_mask = batch_env_idx == env_id
             dummy_w = torch.ones((), device=device, requires_grad=True)
             env_loss = criterion(causal_pred[env_mask] * dummy_w, labels[env_mask])
-            grads.append(
-                torch.autograd.grad(env_loss, dummy_w, create_graph=create_graph)[0]
-            )
+            grads.append(torch.autograd.grad(env_loss, dummy_w, create_graph=create_graph)[0])
 
     if len(grads) < 2:
         return torch.tensor(0.0, device=device)
 
-    return torch.sum(torch.stack([grad ** 2 for grad in grads]))
+    return torch.sum(torch.stack([grad**2 for grad in grads]))

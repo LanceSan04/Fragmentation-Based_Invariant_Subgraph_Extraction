@@ -27,11 +27,12 @@ class SuGAREnsemble:
             raise ValueError("aggregation_mode must be 'mean' or 'max'")
         self.views = list(views)
         self.aggregation_mode = aggregation_mode
-        if inference_policy == 'shared' and any(
-            getattr(v, 'selection_budget', 'edges') != 'edges' or
-            getattr(v, 'ranking_mode', 'learned') != 'learned' for v in self.views
+        if inference_policy == "shared" and any(
+            getattr(v, "selection_budget", "edges") != "edges"
+            or getattr(v, "ranking_mode", "learned") != "learned"
+            for v in self.views
         ):
-            raise ValueError('Atom budgets and random ranking require independent inference')
+            raise ValueError("Atom budgets and random ranking require independent inference")
 
     @property
     def num_views(self):
@@ -110,8 +111,7 @@ class SuGAREnsemble:
         )
 
         reconstruction_weights = (
-            bool_mask.to(agg_weights.dtype)
-            if "random" in selection_modes else agg_weights
+            bool_mask.to(agg_weights.dtype) if "random" in selection_modes else agg_weights
         )
         if fast:
             atom_batch = reconstruct_batch_fast(

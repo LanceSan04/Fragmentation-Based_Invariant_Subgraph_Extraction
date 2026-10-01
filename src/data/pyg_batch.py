@@ -131,7 +131,9 @@ def split_fragment_view_field(key):
     """Return ``(method, base_field)`` for default or method-prefixed fragment fields."""
     if key in FRAGMENT_VIEW_TENSOR_FIELDS or key in FRAGMENT_VIEW_LIST_FIELDS:
         return None, key
-    for field in sorted(FRAGMENT_VIEW_TENSOR_FIELDS | FRAGMENT_VIEW_LIST_FIELDS, key=len, reverse=True):
+    for field in sorted(
+        FRAGMENT_VIEW_TENSOR_FIELDS | FRAGMENT_VIEW_LIST_FIELDS, key=len, reverse=True
+    ):
         suffix = f"_{field}"
         if key.endswith(suffix):
             return key[: -len(suffix)], field

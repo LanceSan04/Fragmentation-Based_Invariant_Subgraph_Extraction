@@ -5,7 +5,6 @@ import torch.nn as nn
 
 from src.data.atom_graph import ATOM_FDIM, BOND_FDIM
 
-
 POOLING_MEAN_ATOM_AND_INTERNAL_BOND = "mean_atom_and_internal_bond"
 SUPPORTED_POOLING_MODES = {POOLING_MEAN_ATOM_AND_INTERNAL_BOND}
 FRAGMENT_FEATURE_DIM = ATOM_FDIM + BOND_FDIM + 2
@@ -117,7 +116,9 @@ def pool_internal_bond_features(
     return pooled
 
 
-def fragment_size_features(atom_to_fragment, internal_bond_mask, num_fragments=None, bond_index=None):
+def fragment_size_features(
+    atom_to_fragment, internal_bond_mask, num_fragments=None, bond_index=None
+):
     """Return atom-count and internal-bond-count features per fragment."""
     num_fragments = _infer_num_fragments(atom_to_fragment, num_fragments)
     features = torch.zeros((num_fragments, 2), dtype=torch.float32, device=atom_to_fragment.device)

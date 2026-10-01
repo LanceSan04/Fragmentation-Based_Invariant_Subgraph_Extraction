@@ -12,7 +12,6 @@ from src.fragmentation.base import (
 )
 from src.fragmentation.molecule_fragment import find_clusters
 
-
 FRAGMENT_EDGE_FEATURE_DIM = (2 * ATOM_FDIM) + BOND_FDIM + 2
 
 

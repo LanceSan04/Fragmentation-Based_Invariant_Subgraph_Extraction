@@ -18,6 +18,7 @@ from src.training.selection_metrics import trailing_mean
 
 try:
     from sklearn.metrics import roc_auc_score as _sklearn_roc_auc
+
     _SKLEARN_AVAILABLE = True
 except ImportError:
     _SKLEARN_AVAILABLE = False
@@ -103,8 +104,7 @@ class SuGARTrainer:
         self.views = [v.to(device) for v in views]
         self.device = device
         self.optimizers = [
-            Adam(v.parameters(), lr=learning_rate, weight_decay=weight_decay)
-            for v in self.views
+            Adam(v.parameters(), lr=learning_rate, weight_decay=weight_decay) for v in self.views
         ]
         self.lambda_contrast = lambda_contrast
         self.lambda_diversity = lambda_diversity
@@ -115,14 +115,21 @@ class SuGARTrainer:
         self._env_split_key_warned = False
         self.contrast_temperature = contrast_temperature
         self.contrast_sampling = contrast_sampling
-        if contrast_scope not in ('pooled','per_view'):
-            raise ValueError('contrast_scope must be pooled or per_view')
+        if contrast_scope not in ("pooled", "per_view"):
+            raise ValueError("contrast_scope must be pooled or per_view")
         self.contrast_scope = contrast_scope
         self.track_roc_auc = track_roc_auc and _SKLEARN_AVAILABLE
         self.diversity_delay_epochs = int(diversity_delay_epochs)
         self.diversity_ramp_epochs = int(diversity_ramp_epochs)
         self.early_stopping_min_epochs = int(early_stopping_min_epochs)
-        if min(self.diversity_delay_epochs, self.diversity_ramp_epochs, self.early_stopping_min_epochs) < 0:
+        if (
+            min(
+                self.diversity_delay_epochs,
+                self.diversity_ramp_epochs,
+                self.early_stopping_min_epochs,
+            )
+            < 0
+        ):
             raise ValueError("Schedule durations must be nonnegative")
         self.effective_diversity_weight = self.lambda_diversity
         self.loss_log_path = Path(loss_log_path) if loss_log_path else None
@@ -137,13 +144,16 @@ class SuGARTrainer:
         self.selection_weight_avg = bool(selection_weight_avg)
         if self.selection_weight_avg and any(
             isinstance(module, torch.nn.modules.batchnorm._BatchNorm)
-            for view in self.views for module in view.modules()
+            for view in self.views
+            for module in view.modules()
         ):
             raise ValueError(
                 "selection_weight_avg is unsupported for BatchNorm models until "
                 "normalization recalibration is implemented; set it to false."
             )
-        self.ensemble = SuGAREnsemble(self.views, aggregation_mode=aggregation_mode, inference_policy=inference_policy)
+        self.ensemble = SuGAREnsemble(
+            self.views, aggregation_mode=aggregation_mode, inference_policy=inference_policy
+        )
         if track_roc_auc and not _SKLEARN_AVAILABLE:
             print("Warning: scikit-learn not found; ROC-AUC tracking disabled.")
 
@@ -176,30 +186,40 @@ class SuGARTrainer:
         # SuGAr, which backpropagates the sum of its base models' losses. Any
         # per-view term that is averaged instead has its lambda silently divided
         # by num_views relative to the prediction term.
-        per_view_losses = [
-            prediction_loss(pv["predictions"], labels)
-            for pv in per_view
-        ]
+        per_view_losses = [prediction_loss(pv["predictions"], labels) for pv in per_view]
         components["prediction_loss"] = torch.stack(per_view_losses).sum()
 
         if self.lambda_contrast > 0:
-            if self.contrast_scope == 'per_view':
-                contrastive = torch.stack([
-                    supervised_contrastive_loss(
-                        pv['embeddings'], labels, temperature=self.contrast_temperature,
-                        sampling=self.contrast_sampling,
-                        y_pred=pv['logits'].detach().argmax(-1) if self.contrast_sampling.lower() == 'cnc' else None,
-                    ) for pv in per_view
-                ]).sum()
+            if self.contrast_scope == "per_view":
+                contrastive = torch.stack(
+                    [
+                        supervised_contrastive_loss(
+                            pv["embeddings"],
+                            labels,
+                            temperature=self.contrast_temperature,
+                            sampling=self.contrast_sampling,
+                            y_pred=(
+                                pv["logits"].detach().argmax(-1)
+                                if self.contrast_sampling.lower() == "cnc"
+                                else None
+                            ),
+                        )
+                        for pv in per_view
+                    ]
+                ).sum()
             else:
                 contrastive = supervised_contrastive_loss(
-                    torch.cat([pv['embeddings'] for pv in per_view]),
+                    torch.cat([pv["embeddings"] for pv in per_view]),
                     labels.repeat(len(per_view)),
-                    temperature=self.contrast_temperature, sampling=self.contrast_sampling,
-                    y_pred=torch.cat([pv['logits'].detach().argmax(-1) for pv in per_view])
-                    if self.contrast_sampling.lower() == 'cnc' else None,
+                    temperature=self.contrast_temperature,
+                    sampling=self.contrast_sampling,
+                    y_pred=(
+                        torch.cat([pv["logits"].detach().argmax(-1) for pv in per_view])
+                        if self.contrast_sampling.lower() == "cnc"
+                        else None
+                    ),
                 )
-            components['contrastive_loss'] = contrastive
+            components["contrastive_loss"] = contrastive
             components["contrastive_loss_weighted"] = self.lambda_contrast * contrastive
 
         if self.lambda_diversity > 0 and len(self.views) > 1:
@@ -237,10 +257,7 @@ class SuGARTrainer:
             components["diversity_loss_weighted"] = self.effective_diversity_weight * diversity
 
         if batch_env is not None:
-            irm_terms = [
-                invariant_risk_loss(pv["logits"], labels, batch_env)
-                for pv in per_view
-            ]
+            irm_terms = [invariant_risk_loss(pv["logits"], labels, batch_env) for pv in per_view]
             if irm_terms:
                 irm = torch.stack(irm_terms).sum()
                 components["irm_loss"] = irm
@@ -339,9 +356,7 @@ class SuGARTrainer:
                 self._env_split_key_warned = True
             return None
         if self.env_bucket_strategy == "size":
-            bucket_of_value = self._assign_env_buckets_by_size(
-                dataset, values, self.num_envs
-            )
+            bucket_of_value = self._assign_env_buckets_by_size(dataset, values, self.num_envs)
         else:
             bucket_of_value = self._assign_env_buckets(values, self.num_envs)
         return torch.tensor([bucket_of_value[v] for v in values], dtype=torch.long)
@@ -367,7 +382,7 @@ class SuGARTrainer:
         cursor = 0
         for env_id in range(num_envs):
             chunk_size = base_size + (1 if env_id < remainder else 0)
-            for value in ordered_unique_values[cursor:cursor + chunk_size]:
+            for value in ordered_unique_values[cursor : cursor + chunk_size]:
                 bucket_of_value[value] = env_id
             cursor += chunk_size
         return bucket_of_value
@@ -407,8 +422,7 @@ class SuGARTrainer:
                 return (1, str(value))
 
         value_rank = {
-            value: rank
-            for rank, value in enumerate(sorted(size_sum, key=value_sort_key))
+            value: rank for rank, value in enumerate(sorted(size_sum, key=value_sort_key))
         }
 
         def mean_size(value):
@@ -484,14 +498,31 @@ class SuGARTrainer:
 
             loss, components, _ = self._compute_components(per_view, labels, batch_env)
 
-            if step == 0 and getattr(self, 'log_gradient_influence', False):
+            if step == 0 and getattr(self, "log_gradient_influence", False):
                 self.last_gradient_report = {}
-                for group,attr in [('scorer','fragment_masker'),('classifier','atom_classifier')]:
-                    params=[p for v in self.views for p in getattr(v,attr).parameters() if p.requires_grad]
-                    for name in ['prediction_loss','contrastive_loss_weighted']:
-                        term=components[name]
-                        gradients=torch.autograd.grad(term,params,retain_graph=True,allow_unused=True) if term.requires_grad else []
-                        self.last_gradient_report[group+'_'+name]=sum(float(g.detach().square().sum()) for g in gradients if g is not None)**.5
+                for group, attr in [
+                    ("scorer", "fragment_masker"),
+                    ("classifier", "atom_classifier"),
+                ]:
+                    params = [
+                        p
+                        for v in self.views
+                        for p in getattr(v, attr).parameters()
+                        if p.requires_grad
+                    ]
+                    for name in ["prediction_loss", "contrastive_loss_weighted"]:
+                        term = components[name]
+                        gradients = (
+                            torch.autograd.grad(term, params, retain_graph=True, allow_unused=True)
+                            if term.requires_grad
+                            else []
+                        )
+                        self.last_gradient_report[group + "_" + name] = (
+                            sum(
+                                float(g.detach().square().sum()) for g in gradients if g is not None
+                            )
+                            ** 0.5
+                        )
 
             for opt in self.optimizers:
                 opt.zero_grad()
@@ -575,7 +606,9 @@ class SuGARTrainer:
                 batch_env = None
                 if use_env:
                     batch_env = batch.env_id.to(self.device)
-                loss, components, per_view_losses = self._compute_components(per_view, labels, batch_env)
+                loss, components, per_view_losses = self._compute_components(
+                    per_view, labels, batch_env
+                )
                 # Shared-subgraph ensemble prediction: aggregate per-view edge
                 # scores → one shared top-k subgraph → soft-vote. This is the
                 # metric best-epoch/early-stop selection is made on.
@@ -608,11 +641,13 @@ class SuGARTrainer:
                 if self.track_roc_auc
                 else None
             )
-            per_view_metrics.append({
-                "loss": view_loss_sum[i] / num_batches if num_batches else 0.0,
-                "acc": view_correct[i] / view_total[i] if view_total[i] else 0.0,
-                "auc": auc,
-            })
+            per_view_metrics.append(
+                {
+                    "loss": view_loss_sum[i] / num_batches if num_batches else 0.0,
+                    "acc": view_correct[i] / view_total[i] if view_total[i] else 0.0,
+                    "auc": auc,
+                }
+            )
 
         avg_loss = total_loss / num_batches if num_batches else 0.0
         accuracy = correct / total if total else 0.0
@@ -674,8 +709,16 @@ class SuGARTrainer:
             writer = csv.DictWriter(log_file, fieldnames=self._loss_log_fieldnames())
             writer.writerow(row)
 
-    def train(self, train_loader, val_loader=None, num_epochs=100, patience=20,
-              restore_best_weights=True, diagnostic_loader=None, epoch_callback=None):
+    def train(
+        self,
+        train_loader,
+        val_loader=None,
+        num_epochs=100,
+        patience=20,
+        restore_best_weights=True,
+        diagnostic_loader=None,
+        epoch_callback=None,
+    ):
         """Full training loop with complete-window joint checkpoint selection.
 
         ``diagnostic_loader`` (typically the test split) is evaluated once per
@@ -685,7 +728,9 @@ class SuGARTrainer:
         be test-set peeking, so keep it strictly out of the selection path.
         """
         if val_loader is not None and num_epochs < self.selection_ma_window:
-            raise ValueError("epochs must be >= selection_ma_window; use window=1 for a one-epoch smoke test")
+            raise ValueError(
+                "epochs must be >= selection_ma_window; use window=1 for a one-epoch smoke test"
+            )
         num_views = len(self.views)
         history = {
             "train_loss": [],
@@ -718,9 +763,7 @@ class SuGARTrainer:
         raw_metric_history = []
         # Retained top snapshots ranked by smoothed metric. Capacity is 1 for
         # plain best-epoch restore, or the MA window when averaging weights.
-        snapshot_capacity = (
-            self.selection_ma_window if self.selection_weight_avg else 1
-        )
+        snapshot_capacity = self.selection_ma_window if self.selection_weight_avg else 1
         retained_snapshots = []  # list of dicts: {metric, epoch, weights}
         best_snapshot_epoch = None
         best_val_metric = -float("inf")
@@ -729,13 +772,23 @@ class SuGARTrainer:
         self._initialize_loss_log()
 
         from src.training.diversity_schedule import diversity_weight
+
         history["effective_diversity_weight"] = []
-        stop_floor = max(self.early_stopping_min_epochs,
-                         self.diversity_delay_epochs + self.diversity_ramp_epochs
-                         if self.lambda_diversity > 0 else 0)
+        stop_floor = max(
+            self.early_stopping_min_epochs,
+            (
+                self.diversity_delay_epochs + self.diversity_ramp_epochs
+                if self.lambda_diversity > 0
+                else 0
+            ),
+        )
         for epoch in range(num_epochs):
             self.effective_diversity_weight = diversity_weight(
-                self.lambda_diversity, epoch + 1, self.diversity_delay_epochs, self.diversity_ramp_epochs)
+                self.lambda_diversity,
+                epoch + 1,
+                self.diversity_delay_epochs,
+                self.diversity_ramp_epochs,
+            )
             history["effective_diversity_weight"].append(self.effective_diversity_weight)
             if epoch + 1 <= stop_floor:
                 patience_counter = 0
@@ -780,9 +833,7 @@ class SuGARTrainer:
                 for key, value in val_components.items():
                     history[f"val_{key}"].append(value)
 
-                view_acc_str = "  ".join(
-                    f"v{i}={acc:.4f}" for i, acc in enumerate(view_val_accs)
-                )
+                view_acc_str = "  ".join(f"v{i}={acc:.4f}" for i, acc in enumerate(view_val_accs))
                 auc_str = f" | Val AUC: {val_auc:.4f}" if val_auc is not None else ""
                 print(
                     f"Epoch {epoch + 1}/{num_epochs} | "
@@ -793,8 +844,10 @@ class SuGARTrainer:
                 )
 
                 # Never mix fallback accuracy with AUC in the same window.
-                if (len(history["val_selection_metric_name"]) > 1 and
-                        history["val_selection_metric_name"][-2] != metric_label):
+                if (
+                    len(history["val_selection_metric_name"]) > 1
+                    and history["val_selection_metric_name"][-2] != metric_label
+                ):
                     raw_metric_history.clear()
                     retained_snapshots.clear()
                     best_val_metric = -float("inf")
@@ -807,12 +860,15 @@ class SuGARTrainer:
                 if smoothed_metric is not None:
                     # Top-K includes runners-up, not only new all-time records.
                     if restore_best_weights and (
-                        len(retained_snapshots) < snapshot_capacity or
-                        smoothed_metric > retained_snapshots[-1]["metric"]
+                        len(retained_snapshots) < snapshot_capacity
+                        or smoothed_metric > retained_snapshots[-1]["metric"]
                     ):
                         self._retain_snapshot(
-                            retained_snapshots, snapshot_capacity, smoothed_metric,
-                            epoch + 1, [deepcopy(v.state_dict()) for v in self.views],
+                            retained_snapshots,
+                            snapshot_capacity,
+                            smoothed_metric,
+                            epoch + 1,
+                            [deepcopy(v.state_dict()) for v in self.views],
                         )
                         best_snapshot_epoch = retained_snapshots[0]["epoch"]
                     if smoothed_metric > best_val_metric:
@@ -822,7 +878,11 @@ class SuGARTrainer:
                         patience_counter += 1
                     if epoch + 1 <= stop_floor:
                         patience_counter = 0
-                    if patience is not None and epoch + 1 > stop_floor and patience_counter >= patience:
+                    if (
+                        patience is not None
+                        and epoch + 1 > stop_floor
+                        and patience_counter >= patience
+                    ):
                         print(f"Early stopping at epoch {epoch + 1}")
                         should_stop = True
             else:
@@ -841,9 +901,7 @@ class SuGARTrainer:
                 history["test_loss"].append(test_loss)
                 history["test_acc"].append(test_acc)
                 history["test_auc"].append(test_auc)
-                test_auc_str = (
-                    f" | Test AUC: {test_auc:.4f}" if test_auc is not None else ""
-                )
+                test_auc_str = f" | Test AUC: {test_auc:.4f}" if test_auc is not None else ""
                 print(
                     f"           (diagnostic) Test Loss: {test_loss:.4f} | "
                     f"Test Acc: {test_acc:.4f}{test_auc_str}"
@@ -856,7 +914,9 @@ class SuGARTrainer:
                     "train_loss": train_loss,
                     "train_prediction_loss": train_components["prediction_loss"],
                     "train_contrastive_loss": train_components["contrastive_loss"],
-                    "train_contrastive_loss_weighted": train_components["contrastive_loss_weighted"],
+                    "train_contrastive_loss_weighted": train_components[
+                        "contrastive_loss_weighted"
+                    ],
                     "train_diversity_loss": train_components["diversity_loss"],
                     "train_diversity_loss_weighted": train_components["diversity_loss_weighted"],
                     "train_irm_loss": train_components["irm_loss"],
@@ -898,15 +958,11 @@ class SuGARTrainer:
         )
         if restore_best_weights and retained_snapshots:
             window_note = (
-                f" (MA window {self.selection_ma_window})"
-                if self.selection_ma_window > 1
-                else ""
+                f" (MA window {self.selection_ma_window})" if self.selection_ma_window > 1 else ""
             )
             if self.selection_weight_avg and len(retained_snapshots) > 1:
                 epochs = [s["epoch"] for s in retained_snapshots]
-                averaged = self._average_snapshots(
-                    [s["weights"] for s in retained_snapshots]
-                )
+                averaged = self._average_snapshots([s["weights"] for s in retained_snapshots])
                 for view, weights in zip(self.views, averaged):
                     view.load_state_dict(weights)
                 print(
@@ -967,11 +1023,7 @@ class SuGARTrainer:
     @staticmethod
     def _pearson(xs, ys):
         """Pearson correlation over paired, non-None samples; None if undefined."""
-        pairs = [
-            (x, y)
-            for x, y in zip(xs, ys)
-            if x is not None and y is not None
-        ]
+        pairs = [(x, y) for x, y in zip(xs, ys) if x is not None and y is not None]
         n = len(pairs)
         if n < 2:
             return None
@@ -982,7 +1034,7 @@ class SuGARTrainer:
         var_y = sum((y - mean_y) ** 2 for _, y in pairs)
         if var_x <= 0 or var_y <= 0:
             return None
-        return cov / (var_x ** 0.5 * var_y ** 0.5)
+        return cov / (var_x**0.5 * var_y**0.5)
 
     def _report_selection_diagnostics(self, history, best_snapshot_epoch, metric_label):
         """Print the honest val→test gap and val↔test correlation.

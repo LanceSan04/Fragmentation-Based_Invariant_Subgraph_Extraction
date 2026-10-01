@@ -1,8 +1,0 @@
-base_config: configs/parameter_winner_test_base.yaml
-eval_base_seed: 3001
-eval_runs: 3
-output_dir: outputs/assay/parameter_winner_test
-overrides: {}
-retain_eval_artifacts: true
-test_split: ood_test
-auc_ma_window: 1

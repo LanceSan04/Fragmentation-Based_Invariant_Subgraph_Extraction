@@ -15,11 +15,15 @@ from rdkit import Chem
 import torch
 from torch_geometric.data.separate import separate
 
-
 GOOD_HIV_URL = "https://drive.google.com/file/d/1CoOqYCuLObnG5M0D8a2P2NyL61WjbCzo/view"
 GOOD_HIV_SHA256 = "767eebf62bda13a96da9507ec80391adfd2bf3f1b33aaff1f8ff3064aaaed4ee"
-SPLITS = {"train": "train", "ood_val": "val", "ood_test": "test",
-          "iid_val": "id_val", "iid_test": "id_test"}
+SPLITS = {
+    "train": "train",
+    "ood_val": "val",
+    "ood_test": "test",
+    "iid_val": "id_val",
+    "iid_test": "id_test",
+}
 
 
 def file_sha256(path):
@@ -42,19 +46,30 @@ def molecule_record(data, domain, official_split, position):
         raise ValueError("SMILES atom count differs from the official GOOD graph")
     if [atom.GetAtomicNum() for atom in mol.GetAtoms()] != data.x[:, 0].tolist():
         raise ValueError("SMILES atom ordering/elements differ from the official GOOD graph")
-    expected_edges = sorted((a, b) for bond in mol.GetBonds()
-                            for a, b in ((bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()),
-                                         (bond.GetEndAtomIdx(), bond.GetBeginAtomIdx())))
+    expected_edges = sorted(
+        (a, b)
+        for bond in mol.GetBonds()
+        for a, b in (
+            (bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()),
+            (bond.GetEndAtomIdx(), bond.GetBeginAtomIdx()),
+        )
+    )
     if expected_edges != sorted(map(tuple, data.edge_index.t().tolist())):
         raise ValueError("SMILES bonds differ from the official GOOD graph")
     source_id = int(torch.as_tensor(data.idx).item())
     domain_id = int(torch.as_tensor(data.domain_id).item())
     env = getattr(data, "env_id", None)
-    return dict(smiles=data.smiles, cls_label=int(label.item()),
-                molecule_id=f"GOODHIV:{source_id}", domain_id=domain_id,
-                good_source_id=source_id, good_domain=domain,
-                good_official_split=official_split, good_split_position=position,
-                good_env_id=None if env is None else int(torch.as_tensor(env).item()))
+    return dict(
+        smiles=data.smiles,
+        cls_label=int(label.item()),
+        molecule_id=f"GOODHIV:{source_id}",
+        domain_id=domain_id,
+        good_source_id=source_id,
+        good_domain=domain,
+        good_official_split=official_split,
+        good_split_position=position,
+        good_env_id=None if env is None else int(torch.as_tensor(env).item()),
+    )
 
 
 def read_good_hiv_archive(path, domain, split_names, expected_sha256=GOOD_HIV_SHA256):
@@ -65,11 +80,17 @@ def read_good_hiv_archive(path, domain, split_names, expected_sha256=GOOD_HIV_SH
     """
     if domain not in ("scaffold", "size"):
         raise ValueError("GOOD-HIV domain must be scaffold or size")
-    if not split_names or len(set(split_names)) != len(split_names) or set(split_names) - SPLITS.keys():
+    if (
+        not split_names
+        or len(set(split_names)) != len(split_names)
+        or set(split_names) - SPLITS.keys()
+    ):
         raise ValueError("Unique supported GOOD-HIV split names required")
     digest = file_sha256(path)
     if digest != expected_sha256:
-        raise ValueError("GOOD-HIV archive checksum mismatch; do not regenerate or silently substitute splits")
+        raise ValueError(
+            "GOOD-HIV archive checksum mismatch; do not regenerate or silently substitute splits"
+        )
     records, source_ids, canonical, counts, member_hashes = {}, {}, {}, {}, {}
     with zipfile.ZipFile(path) as archive:
         for name in split_names:
@@ -93,13 +114,18 @@ def read_good_hiv_archive(path, domain, split_names, expected_sha256=GOOD_HIV_SH
             counts[name] = dict(molecules=len(rows), negative=labels[0], positive=labels[1])
     overlaps = {}
     for i, first in enumerate(split_names):
-        for second in split_names[i + 1:]:
+        for second in split_names[i + 1 :]:
             if source_ids[first] & source_ids[second]:
                 raise ValueError(f"GOOD source index appears in both {first} and {second}")
             overlaps[f"{first}:{second}"] = len(canonical[first] & canonical[second])
-    return records, dict(raw_format=f"good_hiv_{domain}_covariate_zip",
-                         source_url=GOOD_HIV_URL, raw_sha256=digest,
-                         member_sha256=member_hashes, counts=counts,
-                         source_split_names=list(SPLITS.values()), split_mapping=SPLITS,
-                         canonical_smiles_overlap=overlaps,
-                         feature_note="Official molecular topology checked; project 46/14 descriptors replace GOOD 9/3 descriptors. No split regeneration or row dropping.")
+    return records, dict(
+        raw_format=f"good_hiv_{domain}_covariate_zip",
+        source_url=GOOD_HIV_URL,
+        raw_sha256=digest,
+        member_sha256=member_hashes,
+        counts=counts,
+        source_split_names=list(SPLITS.values()),
+        split_mapping=SPLITS,
+        canonical_smiles_overlap=overlaps,
+        feature_note="Official molecular topology checked; project 46/14 descriptors replace GOOD 9/3 descriptors. No split regeneration or row dropping.",
+    )

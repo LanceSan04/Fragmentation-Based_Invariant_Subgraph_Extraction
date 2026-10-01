@@ -89,7 +89,9 @@ def filter_fragment_graph_edges(fragment_batch, eligible_edge_mask):
 
     full_edge_ids = getattr(fragment_batch, "full_fragment_edge_id", None)
     if full_edge_ids is None:
-        full_edge_ids = torch.arange(num_edges, dtype=torch.long, device=fragment_batch.edge_index.device)
+        full_edge_ids = torch.arange(
+            num_edges, dtype=torch.long, device=fragment_batch.edge_index.device
+        )
 
     return Data(
         x=fragment_batch.x,

@@ -10,7 +10,7 @@
 #     .\.venv\Scripts\python.exe main.py full --config configs\experiment.yaml --validate-loaders
 #
 #   Short end-to-end training smoke with checkpoint:
-#     python scripts/smoke_test.py
+#     python -m src.utils.smoke
 #
 #   Evaluate a saved checkpoint without training:
 #     .\.venv\Scripts\python.exe main.py eval checkpoints\smoke.pt --config configs\experiment.yaml --splits ood_test iid_test --device cpu
@@ -24,7 +24,7 @@
 #
 # The original entrypoints still work for focused debugging:
 #   .\.venv\Scripts\python.exe src\data\preprocess.py --config configs\experiment.yaml --validate-loaders
-#   .\.venv\Scripts\python.exe train_sugar.py --config configs\experiment.yaml
+#   .\.venv\Scripts\python.exe main.py train --config configs\experiment.yaml
 #
 # This one file can be used in two modes:
 #
@@ -149,7 +149,7 @@ fragment_feature_dim: 62
 
 # Output directory for generated .pt files and training input.
 # preprocess.py writes one `{split}.pt` file per selected split here.
-# train_sugar.py later loads split files from this same directory.
+# main.py train later loads split files from this same directory.
 #
 # Examples:
 #   processed_dir: data/processed/smoke/group_graph
@@ -243,7 +243,7 @@ debug: true
 debug_record_interval: 250
 debug_molecule_details: false
 
-# PyG DataLoader settings used by --validate-loaders and train_sugar.py.
+# PyG DataLoader settings used by --validate-loaders and main.py train.
 # The loader named by train_split shuffles automatically; all other splits do
 # not. `seed` controls deterministic DataLoader shuffling/worker seeds, not the
 # FragmentCIGA sampler seeds below.
@@ -268,7 +268,7 @@ follow_batch:
   - fragment_x_static
 
 # FragmentCIGA view settings.
-# train_sugar.py/main.py builds `num_views` separate FragmentCIGA views from
+# main.py train builds `num_views` separate FragmentCIGA views from
 # one shared initial state, then trains them with SuGARTrainer. After training,
 # the views are wrapped in SuGAREnsemble for inference-time aggregation.
 # Explicit CLI values override YAML defaults for a single run. When resuming or

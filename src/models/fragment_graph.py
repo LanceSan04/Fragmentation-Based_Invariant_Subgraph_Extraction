@@ -18,11 +18,11 @@ def get_fragment_view_value(molecule_data, field, method=None):
 
 def build_fragment_graph(molecule_data, fragmentation_result):
     """Build a fragment-level graph from molecule data and fragmentation.
-    
+
     Args:
         molecule_data: MoleculeData with atom-level features and bonds
         fragmentation_result: FragmentationResult with fragment provenance
-        
+
     Returns:
         Data: PyG Data object representing the fragment-level graph
               - x: fragment features (from fragment_x_static)
@@ -31,11 +31,11 @@ def build_fragment_graph(molecule_data, fragmentation_result):
     """
     # Fragment features are already pooled in molecule_data.fragment_x_static
     fragment_x = molecule_data.fragment_x_static
-    
+
     # Fragment edges connect fragments that have inter-fragment bonds
     fragment_edge_index = molecule_data.fragment_edge_index
     fragment_edge_attr = molecule_data.fragment_edge_attr
-    
+
     # Create PyG Data object for fragment graph
     fragment_graph = Data(
         x=fragment_x,
@@ -43,7 +43,7 @@ def build_fragment_graph(molecule_data, fragmentation_result):
         edge_attr=fragment_edge_attr,
         num_nodes=fragment_x.size(0),
     )
-    
+
     return fragment_graph
 
 

@@ -30,7 +30,7 @@ from src.models.atom_reconstructor import (
     reconstruct_batch,
     relabel_reconstructed_atoms,
 )
-from scripts.fragmentation_diagnostics import collect_diagnostics, split_summary_rows
+from src.analysis.fragmentation import collect_diagnostics, split_summary_rows
 
 
 class FragmentPipelineTests(unittest.TestCase):
@@ -70,7 +70,9 @@ class FragmentPipelineTests(unittest.TestCase):
         self.assertEqual(len(recovered), 2)
         for original, restored in zip(data_list, recovered):
             self.assertTrue(torch.equal(original.atom_to_fragment, restored.atom_to_fragment))
-            self.assertTrue(torch.equal(original.fragment_to_atom_index, restored.fragment_to_atom_index))
+            self.assertTrue(
+                torch.equal(original.fragment_to_atom_index, restored.fragment_to_atom_index)
+            )
             self.assertTrue(torch.equal(original.fragment_edge_index, restored.fragment_edge_index))
             self.assertTrue(
                 torch.equal(
@@ -109,9 +111,7 @@ class FragmentPipelineTests(unittest.TestCase):
 
         self.assertEqual(data.atom_to_fragment.numel(), data.x.size(0))
         for fragment_id in range(data.fragment_x_static.size(0)):
-            atoms = data.fragment_to_atom_index[1][
-                data.fragment_to_atom_index[0] == fragment_id
-            ]
+            atoms = data.fragment_to_atom_index[1][data.fragment_to_atom_index[0] == fragment_id]
             self.assertTrue(torch.all(data.atom_to_fragment[atoms] == fragment_id))
             self.assert_fragment_atoms_connected(data, atoms)
 
@@ -121,9 +121,7 @@ class FragmentPipelineTests(unittest.TestCase):
         self.assertEqual(data.fragment_x_static.size(0), 3)
         self.assertEqual(data.fragment_smiles, ["[Na+]", "[Na+]", "[Na+]"])
         for fragment_id in range(data.fragment_x_static.size(0)):
-            atoms = data.fragment_to_atom_index[1][
-                data.fragment_to_atom_index[0] == fragment_id
-            ]
+            atoms = data.fragment_to_atom_index[1][data.fragment_to_atom_index[0] == fragment_id]
             self.assertEqual(atoms.numel(), 1)
             self.assert_fragment_atoms_connected(data, atoms)
 
@@ -156,7 +154,9 @@ class FragmentPipelineTests(unittest.TestCase):
             sorted(reconstructed.bond_ids.tolist()),
             sorted(data.bond_ids.tolist()),
         )
-        self.assertTrue(torch.equal(reconstructed.selected_fragment_edge_ids, torch.arange(mask.numel())))
+        self.assertTrue(
+            torch.equal(reconstructed.selected_fragment_edge_ids, torch.arange(mask.numel()))
+        )
         self.assertTrue(
             torch.equal(
                 reconstructed.selected_attachment_bond_ids,
@@ -264,7 +264,9 @@ class FragmentPipelineTests(unittest.TestCase):
             }
 
             run_preprocessing(config)
-            payload = torch.load(osp.join(tmp_dir, "train.pt"), map_location="cpu", weights_only=False)
+            payload = torch.load(
+                osp.join(tmp_dir, "train.pt"), map_location="cpu", weights_only=False
+            )
             data = payload["molecule_data"][0]
 
             for method in ("group_graph", "brics", "recap"):
@@ -280,13 +282,9 @@ class FragmentPipelineTests(unittest.TestCase):
             validate_dataloader_batch(batch)
 
             diagnostics = collect_diagnostics(Path(tmp_dir), ["train"], top_k=5)
-            summary_methods = {
-                row["fragmentation_method"] for row in diagnostics["summary"]
-            }
+            summary_methods = {row["fragmentation_method"] for row in diagnostics["summary"]}
             self.assertEqual(summary_methods, {"group_graph", "brics", "recap"})
-            molecule_methods = {
-                row["fragmentation_method"] for row in diagnostics["molecules"]
-            }
+            molecule_methods = {row["fragmentation_method"] for row in diagnostics["molecules"]}
             self.assertEqual(molecule_methods, {"group_graph", "brics", "recap"})
             self.assertEqual(len(diagnostics["molecules"]), 3)
 
@@ -387,7 +385,9 @@ class FragmentPipelineTests(unittest.TestCase):
             result = run_preprocessing(config)
 
             self.assertEqual(set(result["outputs"]), {"train", "iid_val", "ood_val"})
-            train_payload = torch.load(result["outputs"]["train"], map_location="cpu", weights_only=False)
+            train_payload = torch.load(
+                result["outputs"]["train"], map_location="cpu", weights_only=False
+            )
             self.assertEqual(train_payload["metadata"]["source"]["raw_format"], "drugood_json")
             data = train_payload["molecule_data"][0]
             self.assertEqual(data.y.tolist(), [1.0])

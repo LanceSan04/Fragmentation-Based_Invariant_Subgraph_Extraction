@@ -38,10 +38,14 @@ def random_edge_ranks(fragment_batch, seed, training):
     local_edges = torch.arange(count, device=edge_index.device) - edge_offsets[edge_batch]
     local_src = edge_index[0] - node_offsets[edge_batch]
     local_dst = edge_index[1] - node_offsets[edge_batch]
-    key = (graph_keys[edge_batch] + (int(seed) + 1) * 8191
-           + (local_edges + 1) * 131071 + (local_src + 1) * 1009
-           + (local_dst + 1) * 9176) & 0x7fffffff
+    key = (
+        graph_keys[edge_batch]
+        + (int(seed) + 1) * 8191
+        + (local_edges + 1) * 131071
+        + (local_src + 1) * 1009
+        + (local_dst + 1) * 9176
+    ) & 0x7FFFFFFF
     # Mix each 31-bit key before converting it to a rank in [0, 1).
     for _ in range(3):
-        key = ((key ^ (key >> 16)) * 0x45D9F3B) & 0x7fffffff
+        key = ((key ^ (key >> 16)) * 0x45D9F3B) & 0x7FFFFFFF
     return (key.to(torch.float64) / float(1 << 31)).to(fragment_batch.x.dtype)

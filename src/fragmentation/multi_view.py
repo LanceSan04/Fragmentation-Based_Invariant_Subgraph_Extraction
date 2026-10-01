@@ -112,10 +112,7 @@ class MultiViewFragmenter:
 
     def fragment_all(self, mol):
         """Return ``{method_name: FragmentationResult}`` for every configured method."""
-        return {
-            method: fragmenter.fragment(mol)
-            for method, fragmenter in self.fragmenters.items()
-        }
+        return {method: fragmenter.fragment(mol) for method, fragmenter in self.fragmenters.items()}
 
 
 def _config_get(config, key, default=None):

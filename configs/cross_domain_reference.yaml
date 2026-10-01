@@ -1,5 +1,5 @@
 # Frozen transfer study: no dataset-specific tuning or Size overrides.
-# Merged with parameter_winner_test_base.yaml; full resolved config is saved.
+# Merged with reference_assay.yaml; full resolved config is saved.
 epochs: 100
 num_views: 5
 hidden_dim: 128

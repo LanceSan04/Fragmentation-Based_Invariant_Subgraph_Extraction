@@ -27,7 +27,6 @@ from src.models.fragment_masker import (
 )
 from src.models.fragment_pooler import FRAGMENT_FEATURE_DIM
 
-
 SMILES = ["CCOC(=O)C", "c1ccccc1CC(=O)NC", "CC(C)Cc1ccc(cc1)C(C)C(=O)O"]
 
 
@@ -110,20 +109,26 @@ class ReconstructorAgreementTests(unittest.TestCase):
 
     def test_edge_weights_match(self):
         slow = reconstruct_batch(self.batch, self.mask, selected_fragment_edge_weight=self.scores)
-        fast = reconstruct_batch_fast(self.batch, self.mask, selected_fragment_edge_weight=self.scores)
+        fast = reconstruct_batch_fast(
+            self.batch, self.mask, selected_fragment_edge_weight=self.scores
+        )
 
         self.assertEqual(fast.x.size(0), slow.x.size(0))
         self.assertEqual(fast.edge_index.size(1), slow.edge_index.size(1))
+
         # Compare weights AND attributes attached to the same directed bond.
         def order(graph):
             return (graph.edge_index[0] * graph.x.size(0) + graph.edge_index[1]).argsort()
+
         fi, si = order(fast), order(slow)
         torch.testing.assert_close(fast.edge_index[:, fi], slow.edge_index[:, si])
         torch.testing.assert_close(fast.edge_attr[fi], slow.edge_attr[si])
         torch.testing.assert_close(fast.edge_weight[fi], slow.edge_weight[si])
 
     def test_internal_bonds_are_gated_not_left_at_one(self):
-        fast = reconstruct_batch_fast(self.batch, self.mask, selected_fragment_edge_weight=self.scores)
+        fast = reconstruct_batch_fast(
+            self.batch, self.mask, selected_fragment_edge_weight=self.scores
+        )
         # Scores are drawn from U(0,1); an all-ones gate would mean internal
         # bonds were never gated at all, the pre-fix slow-path behavior.
         self.assertLess(float(fast.edge_weight.max()), 1.0)

@@ -1,15 +1,17 @@
 """Shared experiment RNG setup and numeric summaries."""
+
 import random
 import math
 import statistics
 import numpy as np
 import torch
 
+
 def set_all_seeds(seed):
     """Seed every RNG the training path draws from, model init included.
 
     run_training seeds these again from config.seed; both are kept so a run is
-    reproducible whether it is launched from here or from train_sugar.py.
+    reproducible whether it is launched from here or from main.py.
     Note that CUDA scatter reductions stay nondeterministic, so runs are
     repeatable in distribution but not bit-identical.
     """
@@ -30,5 +32,3 @@ def _summarize(values):
         "std": statistics.stdev(clean) if len(clean) > 1 else 0.0,
         "n": len(clean),
     }
-
-

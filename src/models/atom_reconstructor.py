@@ -112,8 +112,12 @@ def reconstruct_atom_graph(
             device=fragment_edge_index.device,
         )
         selected_bond_indices = torch.empty((0,), dtype=torch.long, device=molecule_data.x.device)
-        selected_attachment_bond_ids = torch.empty((0,), dtype=torch.long, device=molecule_data.x.device)
-        selected_attachment_atoms = torch.empty((2, 0), dtype=torch.long, device=molecule_data.x.device)
+        selected_attachment_bond_ids = torch.empty(
+            (0,), dtype=torch.long, device=molecule_data.x.device
+        )
+        selected_attachment_atoms = torch.empty(
+            (2, 0), dtype=torch.long, device=molecule_data.x.device
+        )
         selected_edge_weights = molecule_data.x.new_empty((0,))
     else:
         selected_fragment_edge_ids = torch.nonzero(
@@ -125,7 +129,9 @@ def reconstruct_atom_graph(
             selected_fragment_edge_mask,
         )
         if selected_fragments.numel() == 0:
-            raise ValueError("At least one fragment edge must be selected when fragment edges exist")
+            raise ValueError(
+                "At least one fragment edge must be selected when fragment edges exist"
+            )
         selected_bond_indices = fragment_edge_to_bond_index[selected_fragment_edge_mask]
         selected_attachment_bond_ids = fragment_edge_to_bond[selected_fragment_edge_mask]
         selected_attachment_atoms = fragment_edge_to_attachment_atoms[
@@ -166,12 +172,12 @@ def reconstruct_atom_graph(
         internal_bond_indices = torch.empty((0,), dtype=torch.long, device=selected_atoms.device)
     else:
         endpoint_mask = selected_atom_mask[bond_src] & selected_atom_mask[bond_dst]
-        internal_mask = endpoint_mask & (
-            atom_to_fragment[bond_src] == atom_to_fragment[bond_dst]
-        )
+        internal_mask = endpoint_mask & (atom_to_fragment[bond_src] == atom_to_fragment[bond_dst])
         internal_bond_indices = torch.nonzero(internal_mask, as_tuple=False).view(-1)
         selected_unique_bonds = torch.unique(
-            torch.cat([internal_bond_indices, selected_bond_indices.to(internal_bond_indices.device)]),
+            torch.cat(
+                [internal_bond_indices, selected_bond_indices.to(internal_bond_indices.device)]
+            ),
             sorted=True,
         )
 
@@ -223,9 +229,11 @@ def reconstruct_atom_graph(
 
     relabeled_edge_index, relabeled_atom_ids = relabel_reconstructed_atoms(
         selected_atoms,
-        molecule_data.bond_index[:, selected_unique_bonds]
-        if selected_unique_bonds.numel()
-        else torch.empty((2, 0), dtype=torch.long, device=selected_atoms.device),
+        (
+            molecule_data.bond_index[:, selected_unique_bonds]
+            if selected_unique_bonds.numel()
+            else torch.empty((2, 0), dtype=torch.long, device=selected_atoms.device)
+        ),
     )
     selected_attachment_node_index = relabel_attachment_atoms(
         selected_atoms,
@@ -236,10 +244,13 @@ def reconstruct_atom_graph(
         num_bonds = selected_unique_bonds.numel()
         src = relabeled_edge_index[0]  # [num_bonds]
         dst = relabeled_edge_index[1]  # [num_bonds]
-        edge_index = torch.stack([
-            torch.cat([src, dst]),
-            torch.cat([dst, src]),
-        ], dim=0)
+        edge_index = torch.stack(
+            [
+                torch.cat([src, dst]),
+                torch.cat([dst, src]),
+            ],
+            dim=0,
+        )
         bond_attrs = molecule_data.bond_attr[selected_unique_bonds]
         edge_attr = torch.cat([bond_attrs, bond_attrs], dim=0)
         bond_range = torch.arange(num_bonds, dtype=torch.long, device=selected_atoms.device)
@@ -284,12 +295,12 @@ def relabel_reconstructed_atoms(atom_ids, edge_index):
         return torch.empty((2, 0), dtype=torch.long, device=edge_index.device), atom_ids
 
     max_id = int(torch.maximum(edge_index.max(), atom_ids.max()))
-    
+
     mapping = torch.zeros(max_id + 1, dtype=torch.long, device=edge_index.device)
     mapping[atom_ids] = torch.arange(atom_ids.numel(), device=edge_index.device)
 
     relabeled = mapping[edge_index]
-    
+
     return relabeled, atom_ids
 
 
@@ -304,8 +315,12 @@ def relabel_attachment_atoms(selected_atoms, selected_attachment_atoms):
         device=selected_attachment_atoms.device,
     )
     max_id = int(selected_atoms.max())
-    mapping = torch.full((max_id + 1,), -1, dtype=torch.long, device=selected_attachment_atoms.device)
-    mapping[selected_atoms] = torch.arange(selected_atoms.numel(), device=selected_attachment_atoms.device)
+    mapping = torch.full(
+        (max_id + 1,), -1, dtype=torch.long, device=selected_attachment_atoms.device
+    )
+    mapping[selected_atoms] = torch.arange(
+        selected_atoms.numel(), device=selected_attachment_atoms.device
+    )
     relabeled = mapping[selected_attachment_atoms]
     if (relabeled < 0).any():
         raise ValueError("selected attachment atom is not in the reconstructed atom set")
@@ -392,10 +407,9 @@ def build_reconstructed_bond_weight(
     selected_edge_weights = torch.as_tensor(selected_edge_weights, dtype=dtype, device=device)
     # selected_unique_bonds is sorted (from torch.unique); searchsorted gives each bond's position
     positions = torch.searchsorted(selected_unique_bonds, selected_bond_indices)
-    if (
-        (positions >= selected_unique_bonds.numel()).any()
-        or (selected_unique_bonds[positions] != selected_bond_indices).any()
-    ):
+    if (positions >= selected_unique_bonds.numel()).any() or (
+        selected_unique_bonds[positions] != selected_bond_indices
+    ).any():
         raise ValueError("selected fragment edge references a bond missing from reconstruction")
     # Raw fragment-edge score (in [0, 1]) so a low score suppresses the boundary
     # bond's messages toward zero when used as a classifier edge-mask gate.
@@ -435,11 +449,11 @@ def reconstruct_batch(
         num_edges = get_fragment_view_value(
             molecule_data, "fragment_edge_index", fragmentation_method
         ).size(1)
-        mask = selected_fragment_edge_mask[cursor: cursor + num_edges].contiguous()
+        mask = selected_fragment_edge_mask[cursor : cursor + num_edges].contiguous()
         if selected_fragment_edge_weight is None:
             edge_weight = None
         else:
-            edge_weight = selected_fragment_edge_weight[cursor: cursor + num_edges].contiguous()
+            edge_weight = selected_fragment_edge_weight[cursor : cursor + num_edges].contiguous()
         reconstructed.append(
             reconstruct_atom_graph(
                 molecule_data,
@@ -486,7 +500,9 @@ def reconstruct_batch_fast(
         raise ValueError("selected_fragment_edge_mask must contain one value per fragment edge")
 
     atom_to_fragment = get_fragment_view_value(batch, "atom_to_fragment", fragmentation_method)
-    frag_node_batch = get_fragment_view_value(batch, "fragment_x_static_batch", fragmentation_method)
+    frag_node_batch = get_fragment_view_value(
+        batch, "fragment_x_static_batch", fragmentation_method
+    )
 
     # Molecules with no fragment edges keep all their fragments — matches the
     # num_fragment_edges == 0 branch of reconstruct_atom_graph.
@@ -549,7 +565,9 @@ def reconstruct_batch_fast(
             bond_weight[pos_internal] = frag_importance[internal_frag]
         if boundary_bonds.numel():
             if edge_scores_full is None:
-                boundary_scores = torch.ones(boundary_bonds.numel(), dtype=batch.x.dtype, device=device)
+                boundary_scores = torch.ones(
+                    boundary_bonds.numel(), dtype=batch.x.dtype, device=device
+                )
             else:
                 boundary_scores = edge_scores_full[mask]
             positions = torch.searchsorted(selected_bonds, boundary_bonds)

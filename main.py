@@ -67,14 +67,13 @@ from pathlib import Path
 import yaml
 
 from src.data.dataloader import build_split_dataloaders, validate_dataloader_batch
-from train_sugar import Config, evaluate_checkpoint, run_training
+from src.training.pipeline import Config, evaluate_checkpoint, run_training
 from src.utils.run_outputs import (
     output_enabled,
     prepare_run_outputs,
     resolve_processed_dir,
     write_run_manifest,
 )
-
 
 ROOT = Path(__file__).resolve().parent
 
@@ -222,9 +221,11 @@ def run_full_command(args):
             output_dir=(
                 Path(args.fragment_diagnostics_output)
                 if args.fragment_diagnostics_output
-                else Path(config.get("fragmentation_diagnostics_dir"))
-                if config.get("fragmentation_diagnostics_dir", None)
-                else None
+                else (
+                    Path(config.get("fragmentation_diagnostics_dir"))
+                    if config.get("fragmentation_diagnostics_dir", None)
+                    else None
+                )
             ),
             max_molecules=args.max_molecules,
             no_plots=args.no_plots,
@@ -232,7 +233,9 @@ def run_full_command(args):
         )
 
     else:
-        print("preprocessing_fragmentation_diagnostics output disabled; skipping fragmentation diagnostics.")
+        print(
+            "preprocessing_fragmentation_diagnostics output disabled; skipping fragmentation diagnostics."
+        )
 
     if output_enabled(config, "training_curves"):
         loss_log = args.loss_log or config.get("loss_log_path", None)
@@ -353,7 +356,7 @@ def run_fragment_diagnostics(
     no_plots=False,
     top_k=20,
 ):
-    from scripts.fragmentation_diagnostics import (
+    from src.analysis.fragmentation import (
         collect_diagnostics,
         default_output_dir,
         default_splits,
@@ -391,7 +394,7 @@ def run_fragment_diagnostics(
 
 
 def run_loss_diagnostics(loss_log, output_dir):
-    from scripts.plot_loss_logs import load_rows, make_plots, write_summary
+    from src.analysis.loss_plots import load_rows, make_plots, write_summary
 
     rows = load_rows(loss_log)
     output_dir = Path(output_dir or "reports/training_diagnostics")
@@ -419,7 +422,7 @@ def run_subgraph_diagnostics(
     batch_size=None,
     device=None,
 ):
-    from scripts.analyze_subgraphs import run_subgraph_analysis
+    from src.analysis.subgraphs import run_subgraph_analysis
 
     return run_subgraph_analysis(
         config or {},
@@ -437,7 +440,11 @@ def run_subgraph_diagnostics(
 
 
 def run_inspect_command(args):
-    from scripts.inspect_processed_pt import load_payload, paths_to_inspect, print_sectioned_record
+    from src.analysis.inspect_processed import (
+        load_payload,
+        paths_to_inspect,
+        print_sectioned_record,
+    )
 
     split_paths = paths_to_inspect(Path(args.path), args.splits)
     if not split_paths:
@@ -451,7 +458,11 @@ def add_common_arguments(parser):
     parser.add_argument("--config", default="configs/experiment.yaml")
     parser.add_argument("--seed", type=int, help="Model, dropout and loader seed.")
     parser.add_argument("--sampler-seed", type=int, help="Fragment-edge sampling seed.")
-    parser.add_argument("--selection-ma-window", type=int, help="Complete validation window; use 1 for one-epoch smoke runs.")
+    parser.add_argument(
+        "--selection-ma-window",
+        type=int,
+        help="Complete validation window; use 1 for one-epoch smoke runs.",
+    )
     parser.add_argument("--dataset")
     parser.add_argument("--processed-root", dest="processed_root")
     parser.add_argument("--processed-dir", dest="processed_dir")
@@ -496,8 +507,12 @@ def add_common_arguments(parser):
     parser.add_argument("--validation-split", dest="validation_split")
     parser.add_argument("--test-split", dest="test_split")
     parser.add_argument("--no-checkpoint", dest="no_checkpoint", action="store_true")
-    parser.add_argument("--no-training-epoch-losses", dest="no_training_epoch_losses", action="store_true")
-    parser.add_argument("--no-final-evaluation-metrics", dest="no_final_evaluation_metrics", action="store_true")
+    parser.add_argument(
+        "--no-training-epoch-losses", dest="no_training_epoch_losses", action="store_true"
+    )
+    parser.add_argument(
+        "--no-final-evaluation-metrics", dest="no_final_evaluation_metrics", action="store_true"
+    )
     parser.add_argument("--no-training-curves", dest="no_training_curves", action="store_true")
     parser.add_argument(
         "--no-preprocessing-fragmentation-diagnostics",
@@ -507,7 +522,9 @@ def add_common_arguments(parser):
     parser.add_argument("--no-subgraph-analysis", dest="no_subgraph_analysis", action="store_true")
     parser.add_argument("--no-effective-config", dest="no_effective_config", action="store_true")
     parser.add_argument("--no-run-manifest", dest="no_run_manifest", action="store_true")
-    parser.add_argument("--no-preprocess-failures", dest="no_preprocess_failures", action="store_true")
+    parser.add_argument(
+        "--no-preprocess-failures", dest="no_preprocess_failures", action="store_true"
+    )
 
 
 def add_subgraph_diagnostic_arguments(parser):
@@ -525,7 +542,14 @@ def build_parser():
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("experiment", help="Search, benchmarks, policy comparisons and diagnostics; use experiment --help.")
+    subparsers.add_parser(
+        "experiment",
+        help="Search, benchmarks, policy comparisons and diagnostics; use experiment --help.",
+    )
+    subparsers.add_parser("tool", help="Analysis and visualization tools; use tool --help.")
+    subparsers.add_parser(
+        "smoke", help="Synthetic end-to-end check of the pipeline (no real data)."
+    )
 
     preprocess = subparsers.add_parser("preprocess", help="Run dataset preprocessing.")
     add_common_arguments(preprocess)
@@ -555,7 +579,9 @@ def build_parser():
     evaluate.add_argument("--output")
     evaluate.set_defaults(func=run_eval_command)
 
-    full = subparsers.add_parser("full", help="Run preprocessing, training, and configured outputs.")
+    full = subparsers.add_parser(
+        "full", help="Run preprocessing, training, and configured outputs."
+    )
     add_common_arguments(full)
     full.add_argument("--resume-from", dest="resume_from")
     full.add_argument("--skip-preprocess", action="store_true")
@@ -626,7 +652,9 @@ def build_parser():
     diagnostics = subparsers.add_parser("diagnostics", help="Run report/diagnostic helpers.")
     diagnostic_subparsers = diagnostics.add_subparsers(dest="diagnostic_command", required=True)
 
-    frag = diagnostic_subparsers.add_parser("fragments", help="Summarize processed fragment outputs.")
+    frag = diagnostic_subparsers.add_parser(
+        "fragments", help="Summarize processed fragment outputs."
+    )
     frag.add_argument("processed_dir")
     frag.add_argument("--splits", nargs="+")
     frag.add_argument("--output-dir")
@@ -685,11 +713,38 @@ def build_parser():
     return parser
 
 
+# Standalone analysis tools: ``python main.py tool <name> --help``.
+TOOLS = {
+    "fragment-figures": "src.analysis.fragment_figures",
+    "fragment-gallery": "src.analysis.fragment_gallery",
+    "fragment-structure": "src.analysis.fragment_structure",
+    "view-overlap": "src.analysis.view_overlap",
+    "assay-groups": "src.evaluation.assay_groups",
+    "drugood-provenance": "src.analysis.drugood_provenance",
+}
+
+
+def run_tool(arguments):
+    import importlib
+
+    if not arguments or arguments[0] in ("-h", "--help") or arguments[0] not in TOOLS:
+        print("usage: main.py tool {" + ",".join(TOOLS) + "} [options]")
+        return 0 if not arguments or arguments[0] in ("-h", "--help") else 2
+    return importlib.import_module(TOOLS[arguments[0]]).main(arguments[1:])
+
+
 def main(argv=None):
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments and arguments[0] == "experiment":
         from src.experiments.cli import main as experiment_main
+
         return experiment_main(arguments[1:])
+    if arguments and arguments[0] == "tool":
+        return run_tool(arguments[1:])
+    if arguments and arguments[0] == "smoke":
+        from src.utils.smoke import main as smoke_main
+
+        return smoke_main(arguments[1:])
     parser = build_parser()
     args = parser.parse_args(arguments)
     return args.func(args)
