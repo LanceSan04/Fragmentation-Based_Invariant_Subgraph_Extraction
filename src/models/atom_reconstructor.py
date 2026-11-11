@@ -6,6 +6,28 @@ from torch_geometric.data import Batch, Data
 from src.models.fragment_graph import get_fragment_view_value
 
 
+def full_atom_graph_with_fragment_gates(batch, fragment_graph, scores, method=None, unit=False):
+    """Preserve every original atom/bond, including disconnected fragments.
+
+    This explicit full-graph control does not infer atom membership from
+    selected fragment-edge endpoints. Legacy crop reconstruction is unchanged.
+    """
+    atom_fragments = get_fragment_view_value(batch, "atom_to_fragment", method)
+    bond_ids = get_fragment_view_value(batch, "fragment_edge_to_bond_index", method)
+    src, dst = batch.bond_index
+    weights = scores.new_ones(src.numel())
+    if not unit:
+        importance = fragment_soft_importance(fragment_graph.x.size(0), fragment_graph.edge_index, scores)
+        internal = atom_fragments[src] == atom_fragments[dst]
+        weights[internal] = importance[atom_fragments[src[internal]]]
+        weights[bond_ids] = scores
+    return Data(x=batch.x, edge_index=torch.cat([batch.bond_index, batch.bond_index.flip(0)], 1),
+        edge_attr=batch.bond_attr.repeat(2, 1), edge_weight=weights.repeat(2), batch=batch.batch,
+        bond_index=batch.bond_index, bond_attr=batch.bond_attr, ptr=batch.ptr,
+        selected_original_atom_indices=torch.arange(batch.x.size(0), device=batch.x.device),
+        selected_original_bond_indices=torch.arange(src.numel(), device=batch.x.device))
+
+
 class ReconstructedAtomData(Data):
     """Atom-level graph reconstructed from selected fragment evidence."""
 

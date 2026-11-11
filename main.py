@@ -87,6 +87,7 @@ COMMON_OVERRIDES = (
     "patience",
     "seed",
     "sampler_seed",
+    "deterministic_training",
     "selection_ma_window",
     "num_views",
     "hidden_dim",
@@ -458,6 +459,8 @@ def add_common_arguments(parser):
     parser.add_argument("--config", default="configs/experiment.yaml")
     parser.add_argument("--seed", type=int, help="Model, dropout and loader seed.")
     parser.add_argument("--sampler-seed", type=int, help="Fragment-edge sampling seed.")
+    parser.add_argument("--deterministic-training", action=argparse.BooleanOptionalAction, default=None,
+                        help="Use deterministic training algorithms where available and warn otherwise.")
     parser.add_argument(
         "--selection-ma-window",
         type=int,

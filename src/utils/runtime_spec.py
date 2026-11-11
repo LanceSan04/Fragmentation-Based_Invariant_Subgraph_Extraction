@@ -1,6 +1,7 @@
 """Record resolved execution choices without environment variables or secrets."""
 
 from importlib.metadata import version, PackageNotFoundError
+import os
 import platform
 import torch
 
@@ -17,8 +18,12 @@ def runtime_spec(config, views, trainer, policies):
         python=platform.python_version(),
         packages=versions,
         device=str(trainer.device),
+        validation_device=str(config.get('validation_device',trainer.device)),
+        validation_deterministic_cpu=str(config.get('validation_device',trainer.device))=='cpu',
         torch_threads=torch.get_num_threads(),
         deterministic_algorithms=torch.are_deterministic_algorithms_enabled(),
+        deterministic_warn_only=torch.is_deterministic_algorithms_warn_only_enabled(),
+        cublas_workspace_config=os.environ.get("CUBLAS_WORKSPACE_CONFIG"),
         cudnn_benchmark=torch.backends.cudnn.benchmark,
         cudnn_deterministic=torch.backends.cudnn.deterministic,
         checkpoint_selection_policies=list(policies),
@@ -32,6 +37,14 @@ def runtime_spec(config, views, trainer, policies):
                 erm=v.erm_baseline,
                 selection_budget=v.selection_budget,
                 ranking_mode=v.ranking_mode,
+                selection_estimator=v.selection_estimator,
+                scorer_context=v.scorer_context,
+                full_graph_gating=v.full_graph_gating,
+                fragment_feature_mode=v.fragment_feature_mode,
+                fragment_encoder_layers=v.fragment_encoder_layers,
+                classifier_feature_mode=v.classifier_feature_mode,
+                selection_temperature=v.selection_temperature,
+                message_gate_mode=v.message_gate_mode,
                 atom_retention_ratio=v.atom_retention_ratio,
                 fragmentation_method=v.fragmentation_method,
                 edge_ratio=v.fragment_masker.ratio,

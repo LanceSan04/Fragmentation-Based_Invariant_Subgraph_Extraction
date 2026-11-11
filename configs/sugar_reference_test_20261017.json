@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "primary": "all_mean",
+  "checkpoint_sha256": "d7f62c58019604ec5d7da2003e70449e508d2a7ae76db4ceacbfaa0cc7e34c0a",
+  "validation_sha256": "3efd923783977e2e01b226347a71507ac5c96d0b2742c71e41cd74854e73b966",
+  "raw_sha256": "33e9557fc53c07f813e1a42a99bb168d184851b6f750d695d686ced7b4a523e7",
+  "variants": {
+    "all_mean": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9
+    ],
+    "greedy_mean": [
+      1,
+      6,
+      8
+    ],
+    "all_max": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9
+    ],
+    "greedy_max": [
+      1,
+      9,
+      8
+    ]
+  },
+  "rule": "Report every variant; no test-based model selection, subset changes, tuning or retries"
+}

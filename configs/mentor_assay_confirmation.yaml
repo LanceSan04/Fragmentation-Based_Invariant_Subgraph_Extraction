@@ -1,0 +1,29 @@
+schema: 1
+epochs: 100
+seeds: [9521, 9522, 9523, 9524, 9525]
+primary_rule: best_raw
+inference_policy: independent
+diagnostic_molecules: 30
+selection_source_sha256: 8c770a59679046c51be5b1d1dd39b34614222f7a088e167eb6fbb370697d6863
+selection_decisions:
+  diversity: {static_pool: 'off', internal_gnn: tiny}
+  contrast: {static_pool: 2.0, internal_gnn: 1.0}
+arms:
+  static_pool:
+    fragment_feature_mode: static_pool
+    lambda_contrast: 2.0
+    lambda_diversity: 0.0
+  internal_gnn:
+    fragment_feature_mode: internal_gnn
+    lambda_contrast: 1.0
+    lambda_diversity: 0.005
+  random_learned_gates:
+    fragment_feature_mode: static_pool
+    ranking_mode: random
+    lambda_contrast: 0.1
+    lambda_diversity: 0.0
+  erm:
+    fragment_feature_mode: static_pool
+    erm_baseline: true
+    lambda_contrast: 0.0
+    lambda_diversity: 0.0

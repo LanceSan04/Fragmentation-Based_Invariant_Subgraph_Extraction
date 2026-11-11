@@ -49,6 +49,7 @@ from src.training.checkpoint import (
     save_training_checkpoint,
     view_state_dicts_from_checkpoint,
 )
+from src.utils.reproducibility import deterministic_training
 from src.utils.run_outputs import prepare_run_outputs, resolve_processed_dir, write_run_manifest
 
 
@@ -130,6 +131,15 @@ def build_shared_initialized_views(
         selection_budget=config.get("selection_budget", "edges"),
         atom_retention_ratio=config.get("atom_retention_ratio", 0.65),
         ranking_mode=config.get("ranking_mode", "learned"),
+        selection_estimator=config.get("selection_estimator", "hard"),
+        selection_temperature=config.get("selection_temperature", 0.1),
+        message_gate_mode=config.get("message_gate_mode", "learned"),
+        scorer_context=config.get("scorer_context", "sampled"),
+        full_graph_gating=config.get("full_graph_gating", False),
+        fragment_feature_mode=config.get("fragment_feature_mode", "static_pool"),
+        fragment_encoder_layers=config.get("fragment_encoder_layers", 2),
+        classifier_feature_mode=config.get("classifier_feature_mode", "raw"),
+        classifier_readout=config.get("classifier_readout", "mean"),
     )
     shared_initial_state = deepcopy(shared_view.state_dict())
 
@@ -156,6 +166,15 @@ def build_shared_initialized_views(
             selection_budget=config.get("selection_budget", "edges"),
             atom_retention_ratio=config.get("atom_retention_ratio", 0.65),
             ranking_mode=config.get("ranking_mode", "learned"),
+            selection_estimator=config.get("selection_estimator", "hard"),
+            selection_temperature=config.get("selection_temperature", 0.1),
+            message_gate_mode=config.get("message_gate_mode", "learned"),
+            scorer_context=config.get("scorer_context", "sampled"),
+            full_graph_gating=config.get("full_graph_gating", False),
+            fragment_feature_mode=config.get("fragment_feature_mode", "static_pool"),
+            fragment_encoder_layers=config.get("fragment_encoder_layers", 2),
+            classifier_feature_mode=config.get("classifier_feature_mode", "raw"),
+            classifier_readout=config.get("classifier_readout", "mean"),
         )
         view.load_state_dict(shared_initial_state)
         views.append(view)
@@ -256,6 +275,15 @@ def apply_checkpoint_defaults(config, checkpoint_payload):
         "selection_mode",
         "selection_budget",
         "ranking_mode",
+        "selection_estimator",
+        "selection_temperature",
+        "message_gate_mode",
+        "scorer_context",
+        "full_graph_gating",
+        "fragment_feature_mode",
+        "fragment_encoder_layers",
+        "classifier_feature_mode",
+        "classifier_readout",
         "atom_retention_ratio",
     }
     for key, value in checkpoint_config(checkpoint_payload).items():
@@ -444,10 +472,6 @@ def write_final_metrics_report(
 
 def seed_everything(seed):
     """Seed every RNG the training path draws from, including model init.
-
-    grid_search.py seeds these before calling run_training, but running
-    main.py used to leave model init and dropout
-    unseeded, so those runs were not reproducible at all.
     """
     if seed is None:
         return
@@ -461,6 +485,11 @@ def seed_everything(seed):
 
 def run_training(config, resume_from=None):
     """Train FragmentCIGA views and optionally resume from a checkpoint."""
+    with deterministic_training(config.get("deterministic_training", False)):
+        return _run_training(config, resume_from)
+
+
+def _run_training(config, resume_from):
     compare_policies = bool(config.get("compare_selection_policies", False))
     if compare_policies:
         if (
@@ -489,6 +518,14 @@ def run_training(config, resume_from=None):
             "inference_policy", "shared"
         ):
             raise ValueError("Changing inference policy requires fresh training, not resume")
+        if config.get("selection_estimator", "hard") != saved_config.get("selection_estimator", "hard"):
+            raise ValueError("Changing selection estimator requires fresh training, not resume")
+        if config.get("message_gate_mode", "learned") != saved_config.get("message_gate_mode", "learned"):
+            raise ValueError("Changing message gate mode requires fresh training, not resume")
+        if config.get("scorer_context", "sampled") != saved_config.get("scorer_context", "sampled"):
+            raise ValueError("Changing scorer context requires fresh training, not resume")
+        if config.get("full_graph_gating", False) != saved_config.get("full_graph_gating", False):
+            raise ValueError("Changing full-graph gating requires fresh training, not resume")
         if any(
             config.get(k, 0) or saved_config.get(k, 0)
             for k in ("diversity_delay_epochs", "diversity_ramp_epochs")

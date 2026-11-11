@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "previous_comparison": "outputs/cross_domain/ec50_seed_check_20261102_v1/results/selected_seed_reproducibility.json",
+  "previous_comparison_sha256": "c6a0740e011d59242f39c2ca35d9d2d38e99cc732229754f1945606014351888",
+  "training_runs": 15,
+  "epochs": 150,
+  "selected_seed_set_unchanged": true,
+  "no_seeds_1_to_5": true
+}

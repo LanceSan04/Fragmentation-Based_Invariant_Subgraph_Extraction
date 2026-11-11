@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "historical_record": "outputs/cross_domain/context_features_full_20261028_v1",
+  "historical_completed_sha256": "3faa32bb7753eb263af3e7d07b1c64bee78a4068f08b3be70f384a493e0f47e8",
+  "historical_manifest_sha256": "0e768e44b0da8a9d539c706c96d9d9022566d575739eda58232121598158ff9c",
+  "historical_seeds": [
+    11011,
+    11012,
+    11013,
+    11014,
+    11015
+  ],
+  "historical_data": [
+    {
+      "dataset": "ec50_assay",
+      "recipe": 4,
+      "parameters": {
+        "learning_rate": 0.0003,
+        "edge_ratio": 0.9,
+        "fragment_sample_ratio": 0.5,
+        "lambda_contrast": 2
+      },
+      "raw_path": "data/raw/drugood/lbap_core_ec50_assay.json",
+      "raw_sha256": "33e9557fc53c07f813e1a42a99bb168d184851b6f750d695d686ced7b4a523e7",
+      "cache_path": "data/processed/fragment_tuning_20261018_v1/ec50_assay/views3"
+    },
+    {
+      "dataset": "ec50_scaffold",
+      "recipe": 4,
+      "parameters": {
+        "learning_rate": 0.0003,
+        "edge_ratio": 0.9,
+        "fragment_sample_ratio": 0.5,
+        "lambda_contrast": 2
+      },
+      "raw_path": "data/raw/drugood/lbap_core_ec50_scaffold.json",
+      "raw_sha256": "a2ca670aad353e0808dacc5680b8a96e7d09a4c0d6dca8e9d333df6ea2c7aff9",
+      "cache_path": "data/processed/fragment_view_diversity_screen_20261018_v1/ec50_scaffold/views3"
+    },
+    {
+      "dataset": "ec50_size",
+      "recipe": 3,
+      "parameters": {
+        "learning_rate": 0.001,
+        "edge_ratio": 0.7,
+        "fragment_sample_ratio": 0.9,
+        "lambda_contrast": 0.1
+      },
+      "raw_path": "data/raw/drugood/lbap_core_ec50_size.json",
+      "raw_sha256": "dd657cca56ec44dd7fd65b4a45927786e4e900560ee0cff1e4be1aa00a650ceb",
+      "cache_path": "data/processed/fragment_view_diversity_screen_20261018_v1/ec50_size/views3"
+    }
+  ],
+  "pilot_config": "configs/official_ec50_context_pilot_20261029.json",
+  "full_config": "configs/official_ec50_context_full_20261029.json",
+  "datasets": [
+    "ec50_assay",
+    "ec50_scaffold",
+    "ec50_size"
+  ],
+  "arms": [
+    "scorer_only",
+    "scorer_and_classifier"
+  ],
+  "inference_policy": "independent",
+  "note": "No IC50, ERM, random-ranking or reference training is included. Historical and official versions reported separately. Stop on any failure; no retry. Pilot is a software/resource gate, not an AUC selection gate."
+}

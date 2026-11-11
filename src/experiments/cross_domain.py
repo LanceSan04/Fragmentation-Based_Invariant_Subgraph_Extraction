@@ -26,7 +26,8 @@ from src.experiments.selection import run_seed, write
 from src.training.checkpoint import load_checkpoint
 from src.training.pipeline import Config
 
-DATASETS = ("ec50_scaffold", "ec50_size", "good_hiv_scaffold", "good_hiv_size")
+DATASETS = ("ec50_assay", "ec50_scaffold", "ec50_size", "ki_assay", "ki_scaffold", "ki_size",
+            "good_hiv_scaffold", "good_hiv_size")
 ARMS = ("learned", "random", "erm")
 SEEDS = (8701, 8702, 8703, 8704, 8705)
 POLICY = {"learned": "independent", "random": "independent", "erm": "shared"}
@@ -34,7 +35,8 @@ SPLITS = ("train", "ood_val", "ood_test")
 
 
 def dataset_config(dataset, raw_root, cache_root, device):
-    if dataset not in DATASETS:
+    # IC50 is opt-in; do not expand historical workflow default dataset lists.
+    if dataset not in DATASETS and dataset not in ('ic50_assay', 'ic50_scaffold', 'ic50_size'):
         raise ValueError(f"Unsupported dataset: {dataset}")
     cache = Path(cache_root).resolve() / dataset
     base = base_config("assay", cache, device)
@@ -46,7 +48,7 @@ def dataset_config(dataset, raw_root, cache_root, device):
         test_split=None,
         report_splits=[],
     )
-    if dataset.startswith("ec50_"):
+    if dataset.startswith(("ec50_", "ki_", "ic50_")):
         base.update(
             dataset=f"drugood_lbap_core_{dataset}",
             raw_format="drugood_json",

@@ -1,0 +1,28 @@
+# Draft compute scope, not a server launch authorization.
+schema: 1
+name: mentor_features_diversity_v1
+epochs: 100
+pilot_epochs: 2
+screen_seeds: [9501, 9502, 9503]
+tune_seeds: [9511, 9512]
+confirmation_seeds: [9521, 9522, 9523, 9524, 9525]
+feature_modes: [static_pool, internal_gnn]
+diversity:
+  'off': {lambda_diversity: 0.0, diversity_delay_epochs: 0, diversity_ramp_epochs: 0}
+  tiny: {lambda_diversity: 0.005, diversity_delay_epochs: 0, diversity_ramp_epochs: 0}
+  small: {lambda_diversity: 0.02, diversity_delay_epochs: 0, diversity_ramp_epochs: 0}
+  ramp: {lambda_diversity: 0.02, diversity_delay_epochs: 10, diversity_ramp_epochs: 20}
+diversity_min_mean_gain: 0.005
+diversity_min_seed_wins: 2
+# Current pooled objective and temperature, NOT the upstream SuGAr objective.
+contrast_coefficients: [0.1, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0]
+contrast_tie_tolerance: 0.002
+confirmation_datasets: [ec50_assay, ec50_scaffold, ec50_size, ki_scaffold, ki_size, good_hiv_scaffold, good_hiv_size]
+controls: [random_learned_gates, erm]
+primary_rule: best_raw
+inference_policy: independent
+diagnostic_molecules: 30
+minimum_free_disk_gib: 30
+# 2 pilots + 24 screens + 32 tuning + 140 confirmation/transfer = 198 trajectories.
+max_training_runs: 198
+upstream_status: pending_compatibility_and_adapter_validation

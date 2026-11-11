@@ -86,6 +86,10 @@ def main(argv=None):
                     # Reverse fragment IDs, then restore canonical src <= dst.
                     # Edge columns still identify the same original bonds.
                     g = build_fragment_graph_batch(batch, method=v.fragmentation_method)
+                    if v.fragment_feature_encoder is not None:
+                        from src.models.fragment_graph import get_fragment_view_value
+                        g.x = v.fragment_feature_encoder(batch,
+                            get_fragment_view_value(batch, "atom_to_fragment", v.fragmentation_method), g.x)
                     r = g.clone()
                     n = g.x.size(0)
                     r.x = g.x.flip(0)

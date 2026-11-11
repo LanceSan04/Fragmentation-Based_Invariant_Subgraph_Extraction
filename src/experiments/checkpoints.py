@@ -56,7 +56,7 @@ def restore(path, cache, device):
     return config, views
 
 
-def evaluate_saved(checkpoint, split, cache, device, policy, seed):
+def evaluate_saved(checkpoint, split, cache, device, policy, seed, prediction_path=None):
     """Restore one frozen checkpoint and load only the requested split."""
     payload = load_checkpoint(checkpoint, map_location="cpu")
     values = dict(payload["config"])
@@ -73,6 +73,8 @@ def evaluate_saved(checkpoint, split, cache, device, policy, seed):
     loaders = build_split_dataloaders(cache, config)
     if split not in loaders:
         raise FileNotFoundError(cache / f"{split}.pt")
+    assays = [str((getattr(d, "metadata", None) or {}).get("assay_id", ""))
+              for d in loaders[split].dataset] if prediction_path is not None else None
     strip_non_tensor_batch_fields(loaders)
     views = build_views_from_feature_dims(config, payload["feature_dims"])
     load_view_state_dicts(views, payload)
@@ -81,7 +83,33 @@ def evaluate_saved(checkpoint, split, cache, device, policy, seed):
     ensemble = SuGAREnsemble(
         views, aggregation_mode=config.aggregation_mode, inference_policy=policy
     )
-    loss, accuracy, auc = _evaluate_ensemble(ensemble, loaders[split], device, True)
+    labels, probabilities = [], []
+    if prediction_path is not None:
+        # Capture the very same forward passes used to compute the reported AUC.
+        class Collector:
+            def eval(self):
+                ensemble.eval()
+
+            def __call__(self, batch, **kwargs):
+                output = ensemble(batch, **kwargs)
+                labels.append(batch.y.detach().cpu().reshape(-1).numpy())
+                probabilities.append(output.detach().exp().cpu().numpy()[:, 1])
+                return output
+        evaluator = Collector()
+    else:
+        evaluator = ensemble
+    import torch
+    with torch.no_grad():
+        loss, accuracy, auc = _evaluate_ensemble(evaluator, loaders[split], device, True)
     if auc is None or not math.isfinite(auc):
         raise ValueError(f"Finite {split} AUC required for seed {seed}")
+    if prediction_path is not None:
+        import numpy as np
+        prediction_path = Path(prediction_path)
+        prediction_path.parent.mkdir(parents=True, exist_ok=True)
+        y, p = np.concatenate(labels), np.concatenate(probabilities)
+        if len(y) != len(assays):
+            raise ValueError("Prediction membership differs from dataset")
+        np.savez_compressed(prediction_path, labels=y, probabilities=p,
+                            assays=np.asarray(assays), row_index=np.arange(len(y)))
     return {"loss": loss, "acc": accuracy, "auc": auc}

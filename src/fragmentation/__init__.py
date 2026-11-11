@@ -3,8 +3,10 @@
 from src.fragmentation.brics import BRICSFragmenter
 from src.fragmentation.group_graph import GroupGraphFragmenter
 from src.fragmentation.recap import RECAPFragmenter
+from src.fragmentation.atom import AtomFragmenter
 
 FRAGMENTERS = {
+    "atom": AtomFragmenter,
     "group_graph": GroupGraphFragmenter,
     "brics": BRICSFragmenter,
     "recap": RECAPFragmenter,

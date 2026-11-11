@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "reference_plan_sha256": "2e886e63907ae47779d0e54e96bfaf647222f977f3820d3f31b8b401c31d9bad",
+  "datasets": ["ec50_scaffold", "ec50_size"],
+  "seeds": [10501, 10502],
+  "epochs": 100,
+  "inference_policy": "independent",
+  "feature_mode": "static_pool",
+  "columns": ["learning_rate", "edge_ratio", "fragment_sample_ratio", "lambda_contrast"],
+  "recipes": [
+    [0.0003, 0.5, 0.7, 2],
+    [0.0001, 0.3, 0.7, 0],
+    [0.001, 0.7, 0.9, 0.1],
+    [0.0003, 0.3, 0.9, 2],
+    [0.0001, 0.5, 0.9, 0.1],
+    [0.001, 0.5, 0.7, 0],
+    [0.0003, 0.7, 0.7, 0.1],
+    [0.0001, 0.7, 0.9, 2],
+    [0.001, 0.3, 0.7, 0],
+    [0.0003, 0.5, 0.9, 2],
+    [0.0001, 0.3, 0.9, 0.1],
+    [0.001, 0.7, 0.7, 0]
+  ]
+}

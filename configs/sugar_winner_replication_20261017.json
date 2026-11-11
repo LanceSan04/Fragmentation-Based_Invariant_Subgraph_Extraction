@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "selection_sha256": "1569cf9670c3c00dec7f63855eb9824a0f0d81529acdb6397b6c98042f47c08e",
+  "raw_sha256": "33e9557fc53c07f813e1a42a99bb168d184851b6f750d695d686ced7b4a523e7",
+  "initializations": [2, 3, 4, 5, 6],
+  "epochs": 40,
+  "views": 10,
+  "contrast": 32,
+  "diversity_penalty": 0.01,
+  "sample_rate": 90,
+  "contrastive_indexing": "released",
+  "primary": "all_mean"
+}

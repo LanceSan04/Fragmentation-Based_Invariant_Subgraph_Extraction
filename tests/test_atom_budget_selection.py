@@ -8,6 +8,32 @@ from src.models.sugar_ensemble import SuGAREnsemble
 
 
 class AtomBudgetTests(unittest.TestCase):
+    def test_known_overlap_tie_and_eligibility(self):
+        sizes = torch.tensor([4, 2, 4])
+        edges = torch.tensor([[0, 1, 0], [1, 2, 2]])
+        # Prefix counts: 6, 10, 10, never 6+6. Target eight is tied;
+        # the documented tie rule prefers six atoms and one edge.
+        args = (torch.tensor([3., 2., 1.]), edges, torch.zeros(3, dtype=torch.long),
+                sizes, torch.tensor([10]))
+        self.assertEqual(atom_budget_mask(*args, torch.ones(3, dtype=torch.bool), .8).tolist(), [True, False, False])
+        self.assertEqual(atom_budget_mask(*args, torch.tensor([False, True, False]), .65).tolist(), [False, True, False])
+        self.assertFalse(atom_budget_mask(*args, torch.zeros(3, dtype=torch.bool), .65).any())
+
+    def test_batch_equals_separate_with_interleaved_edges_and_edgeless_graph(self):
+        sizes = torch.tensor([3, 2, 5, 9, 1, 2, 7])
+        groups = torch.tensor([0, 0, 0, 1, 2, 2, 2])
+        edges = torch.tensor([[4, 0, 5, 1], [5, 1, 6, 2]])
+        scores = torch.tensor([2., 2., 1., 1.])
+        eligible = torch.tensor([True, True, False, True])
+        counts = torch.tensor([10, 9, 10])
+        actual = atom_budget_mask(scores, edges, groups, sizes, counts, eligible, .65)
+        for graph in range(3):
+            nodes = torch.where(groups == graph)[0]
+            ids = torch.where(groups[edges[0]] == graph)[0]
+            local = atom_budget_mask(scores[ids], edges[:, ids] - int(nodes[0]),
+                torch.zeros(len(nodes), dtype=torch.long), sizes[nodes], counts[graph:graph+1], eligible[ids], .65)
+            self.assertTrue(torch.equal(actual[ids], local))
+
     def test_prefix_oracle(self):
         generator = torch.Generator().manual_seed(102)
         for trial in range(100):

@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/tencent-ailab/DrugOOD",
+  "commit": "61a70e4ad1fb227e4a264ed5ba87d4c78fdb4ae7",
+  "files": {
+    "drugood/utils/smile_to_dgl.py": "a5c82e46084f1a00e7cd805cb3d37490a1708912ed1f936be6da574eff945588",
+    "configs/algorithms/erm/lbap_core_ec50_assay_erm.py": "044cd37445a792781fcea812a10a236310c6f7a8826dde6d0876d2a4861bcaf3",
+    "LICENSE": "491d1d24dd95012c199af8bd2af9416c2bf59b3284b366a881ba000c88e4cce4"
+  },
+  "note": "Unmodified reference files. Preserve license. Config is reference only; relative base files not vendored."
+}

@@ -24,6 +24,9 @@ class RemoteWorkflowTests(unittest.TestCase):
         (root / "skills/SKILL.md").write_text("local skill")
         (root / "tools/remote").mkdir(parents=True)
         (root / "tools/remote/reu_ssh.py").write_text("local credential client")
+        (root / "tools/remote/reu_release.py").write_text("# release verifier\n")
+        (root / "tools/remote/reu_remote_job.py").write_text("# guarded launcher\n")
+        (root / "tools/remote/reu_secondary_job.py").write_text("# explicit secondary slot\n")
 
     def test_bundle_roundtrip_excludes_private_and_generated_files(self):
         with tempfile.TemporaryDirectory() as d:
@@ -38,6 +41,9 @@ class RemoteWorkflowTests(unittest.TestCase):
                 self.assertNotIn("AGENTS.md", archive.namelist())
                 self.assertNotIn("skills/SKILL.md", archive.namelist())
                 self.assertNotIn("tools/remote/reu_ssh.py", archive.namelist())
+                self.assertIn("tools/remote/reu_release.py", archive.namelist())
+                self.assertIn("tools/remote/reu_remote_job.py", archive.namelist())
+                self.assertIn("tools/remote/reu_secondary_job.py", archive.namelist())
                 self.assertNotIn(".env", archive.namelist())
                 self.assertNotIn("outputs/result.json", archive.namelist())
                 archive.extractall(target)
@@ -139,6 +145,23 @@ class RemoteWorkflowTests(unittest.TestCase):
 
 
 class RemoteSessionTests(unittest.TestCase):
+    def test_mentor_confirmation_reaches_session_guard(self):
+        argv=['reu_remote_job.py','--record-dir','unused','--gpu','1','--','mentor-confirm']
+        with patch.object(sys,'argv',argv),patch.object(sys,'platform','linux'),patch.object(
+            job,'require_tmux_session',side_effect=RuntimeError('session guard reached')
+        ):
+            with self.assertRaisesRegex(RuntimeError,'session guard reached'):
+                job.main()
+
+    def test_study_queue_reaches_session_guard(self):
+        argv = ['reu_remote_job.py', '--record-dir', 'unused', '--gpu', '1', '--',
+                'study-queue', '--stage-limit', 'pilot']
+        with patch.object(sys, 'argv', argv), patch.object(sys, 'platform', 'linux'), patch.object(
+            job, 'require_tmux_session', side_effect=RuntimeError('session guard reached')
+        ):
+            with self.assertRaisesRegex(RuntimeError, 'session guard reached'):
+                job.main()
+
     def test_cross_domain_workflow_reaches_session_guard(self):
         argv = [
             "reu_remote_job.py",

@@ -28,6 +28,8 @@ class SuGAREnsemble:
         self.views = list(views)
         self.aggregation_mode = aggregation_mode
         if inference_policy == "shared" and any(
+            getattr(v, "message_gate_mode", "learned") != "learned"
+            or
             getattr(v, "selection_budget", "edges") != "edges"
             or getattr(v, "ranking_mode", "learned") != "learned"
             for v in self.views
@@ -93,7 +95,9 @@ class SuGAREnsemble:
         all_soft_weights = []
         all_eligible_masks = []
         for view in views:
-            edge_scores, eligible_mask = view.score_fragment_edges(fragment_batch)
+            edge_scores, eligible_mask = (view.score_fragment_edges(fragment_batch, batch_data)
+                if getattr(view, "fragment_feature_encoder", None) is not None
+                else view.score_fragment_edges(fragment_batch))
             all_soft_weights.append(edge_scores)
             all_eligible_masks.append(eligible_mask)
 
@@ -150,7 +154,8 @@ class SuGAREnsemble:
         for _, method_views in self._views_by_fragmentation(subgraph_views):
             atom_batch, _ = self._aggregate_subgraph(batch_data, method_views, fast=True)
             for view in method_views:
-                logits = view.atom_classifier(atom_batch)
+                classifier_graph = view.classifier_graph(atom_batch, batch_data)
+                logits = view.atom_classifier(classifier_graph)
                 all_log_probs.append(F.log_softmax(logits, dim=-1))
 
         # Log of the mean probability, computed stably without clamping away

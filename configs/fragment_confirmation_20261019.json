@@ -1,0 +1,64 @@
+{
+  "schema": 1,
+  "epochs": 150,
+  "seeds": [
+    10601,
+    10602,
+    10603,
+    10604,
+    10605
+  ],
+  "search_config_sha256": "8121114762d2a985b2232b8edc229a26b93fc60308064bf0d0871a7faea0eaee",
+  "candidates": [
+    {
+      "dataset": "ec50_assay",
+      "recipe": 4,
+      "parameters": {
+        "learning_rate": 0.0003,
+        "edge_ratio": 0.9,
+        "fragment_sample_ratio": 0.5,
+        "lambda_contrast": 2
+      }
+    },
+    {
+      "dataset": "ec50_scaffold",
+      "recipe": 4,
+      "parameters": {
+        "learning_rate": 0.0003,
+        "edge_ratio": 0.9,
+        "fragment_sample_ratio": 0.5,
+        "lambda_contrast": 2
+      }
+    },
+    {
+      "dataset": "ec50_scaffold",
+      "recipe": 7,
+      "parameters": {
+        "learning_rate": 0.0003,
+        "edge_ratio": 0.7,
+        "fragment_sample_ratio": 0.5,
+        "lambda_contrast": 0.1
+      }
+    },
+    {
+      "dataset": "ec50_size",
+      "recipe": 3,
+      "parameters": {
+        "learning_rate": 0.001,
+        "edge_ratio": 0.7,
+        "fragment_sample_ratio": 0.9,
+        "lambda_contrast": 0.1
+      }
+    }
+  ],
+  "search_status_paths": {
+    "ec50_assay": "outputs/assay/fragment_tuning_20261018_v1/results/status.json",
+    "ec50_scaffold": "outputs/scaffold/fragment_tuning_20261018_v1/results/status.json",
+    "ec50_size": "outputs/size/fragment_tuning_20261018_v1/results/status.json"
+  },
+  "search_status_sha256": {
+    "ec50_assay": "5c4cb7df1e4852067d67805aed180e61a89bc172667e66346aee54646078ccba",
+    "ec50_scaffold": "dc6e04346bd6152638abad2e4198f3f8d7bb90a1ba419d470035c0a03e30ff79",
+    "ec50_size": "72ba2aa86c5d73f220be5254211da008f46a833ab383acd2162ab72240b6a3fa"
+  }
+}

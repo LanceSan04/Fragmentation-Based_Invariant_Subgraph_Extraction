@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "synthetic": false,
+  "raw_sha256": "33e9557fc53c07f813e1a42a99bb168d184851b6f750d695d686ced7b4a523e7",
+  "replication_completed_sha256": "0eea3c75261cfc920d50a6492fc4173aeab8e31199394e5f85df8c83ebabb165",
+  "runs": [
+    {
+      "initialization": 2,
+      "files": {
+        "train/run_spec.json": "c8c9478e3527310193c350043496173999104e3fe05da2eb8d0c8a935eafaa5b",
+        "validation/completed.json": "f2c6bd2aa496776df20ae56c2270fde0b839f96c58ab623fe599dec53e810a44",
+        "test/completed.json": "a7323bd53fac7981475e4a1b7d73aab6c7271bbd4208af5de7a2c5774b13e6f3",
+        "train/best_views.pt": "074db6967c56f1247791a00b6ec44c779849bfefe8c3c7d870178ff2eb8b97df"
+      }
+    },
+    {
+      "initialization": 3,
+      "files": {
+        "train/run_spec.json": "829dda257a1a8a832730482005babe04d4b65beb956923689b998e49896df507",
+        "validation/completed.json": "5ef1e6f3e9da6842b892c9d936a56e8126c90b5088a9fb4d08479e8fa89e2ebf",
+        "test/completed.json": "b3feb03611172badcaa48d3613beb1545b029059f4623bbbf1be4dbf644efc62",
+        "train/best_views.pt": "5948e3faecd72f33db4129bc65a106b961fd3bdccc635fbfb2e905f502b6c28a"
+      }
+    },
+    {
+      "initialization": 4,
+      "files": {
+        "train/run_spec.json": "3a736cd6326874ceab75f772cefaaed6b1f0d1d45a60701b4a0f816631423731",
+        "validation/completed.json": "d8756bb523bf3c502ce9424b15a04fddf5dbe97c011b786a5d987c37f4fc7455",
+        "test/completed.json": "865084276fb3722ac380b79bce58be8bc4e0e26bd3a65a695128364a45b08738",
+        "train/best_views.pt": "8ef1fb7eb50508bed67a177a9c27f66206488d7f7d93caa1f9e2a0b0fc8609dd"
+      }
+    },
+    {
+      "initialization": 5,
+      "files": {
+        "train/run_spec.json": "b9e2230600c02ee63b15a3161bcbfe76639d80501f7fc3eb6f652f18e465fb94",
+        "validation/completed.json": "18c6de6f9a72dfd2d9680efd1a6ced6b861cfaf38cb2089121b9d5a94e65ea44",
+        "test/completed.json": "71038a32492f2b48835ea39c683e58b175de693144dc11b94156efee58902b65",
+        "train/best_views.pt": "d5368a6cc1e23ad14e8d8a529e82fc9792fc7f008733b4e0439d10c2c8ce9a48"
+      }
+    },
+    {
+      "initialization": 6,
+      "files": {
+        "train/run_spec.json": "9f9fce6ea4506667f4d0ba166045809d0e2234192f6152adbadd34458d1460d5",
+        "validation/completed.json": "d13889bcbb7ac4522daf3ed4ec7acc1a581f2bad799546cd7867fb37fae93669",
+        "test/completed.json": "6cc2df37c1be6b2458eed4d8b452af1d7bd3e8e2e65a05ee2064e7cac4a78172",
+        "train/best_views.pt": "5c44cea095be9335f7cf6689590e11a9083d315ad04a66f32988dc12fad2defe"
+      }
+    }
+  ],
+  "policies": [
+    "shared_raw_uniform",
+    "independent_uniform"
+  ],
+  "scope": "Same weights, fixed shared-tuned recipe, no selection changes; exploratory test comparison"
+}

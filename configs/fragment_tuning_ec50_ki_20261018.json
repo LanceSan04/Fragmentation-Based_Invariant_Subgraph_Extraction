@@ -1,0 +1,136 @@
+{
+  "schema": 1,
+  "reference_plan_sha256": "2e886e63907ae47779d0e54e96bfaf647222f977f3820d3f31b8b401c31d9bad",
+  "epochs": 150,
+  "seeds": [
+    10501,
+    10502
+  ],
+  "fixed": {
+    "num_views": 3,
+    "view_fragmentations": {
+      "group_graph": 3
+    },
+    "lambda_diversity": 0.005,
+    "diversity_delay_epochs": 0,
+    "diversity_ramp_epochs": 0,
+    "lambda_irm": 0.0,
+    "fragment_feature_mode": "static_pool",
+    "inference_policy": "independent",
+    "ranking_mode": "learned",
+    "selection_estimator": "hard",
+    "message_gate_mode": "learned"
+  },
+  "columns": [
+    "learning_rate",
+    "edge_ratio",
+    "fragment_sample_ratio",
+    "lambda_contrast"
+  ],
+  "recipes": [
+    [
+      0.0003,
+      0.5,
+      0.7,
+      2
+    ],
+    [
+      0.0001,
+      0.3,
+      0.5,
+      0
+    ],
+    [
+      0.001,
+      0.7,
+      0.9,
+      0.1
+    ],
+    [
+      0.0003,
+      0.9,
+      0.5,
+      2
+    ],
+    [
+      0.0001,
+      0.5,
+      0.9,
+      0.1
+    ],
+    [
+      0.001,
+      0.3,
+      0.7,
+      0
+    ],
+    [
+      0.0003,
+      0.7,
+      0.5,
+      0.1
+    ],
+    [
+      0.0001,
+      0.9,
+      0.9,
+      2
+    ],
+    [
+      0.001,
+      0.5,
+      0.5,
+      0
+    ],
+    [
+      0.0003,
+      0.3,
+      0.9,
+      2
+    ],
+    [
+      0.0001,
+      0.7,
+      0.7,
+      0.1
+    ],
+    [
+      0.001,
+      0.9,
+      0.7,
+      0
+    ]
+  ],
+  "datasets": {
+    "ec50_assay": {
+      "raw_path": "data/raw/drugood/lbap_core_ec50_assay.json",
+      "raw_sha256": "33e9557fc53c07f813e1a42a99bb168d184851b6f750d695d686ced7b4a523e7",
+      "cache_path": "data/processed/fragment_tuning_20261018_v1/ec50_assay/views3"
+    },
+    "ec50_scaffold": {
+      "raw_path": "data/raw/drugood/lbap_core_ec50_scaffold.json",
+      "raw_sha256": "a2ca670aad353e0808dacc5680b8a96e7d09a4c0d6dca8e9d333df6ea2c7aff9",
+      "cache_path": "data/processed/fragment_view_diversity_screen_20261018_v1/ec50_scaffold/views3"
+    },
+    "ec50_size": {
+      "raw_path": "data/raw/drugood/lbap_core_ec50_size.json",
+      "raw_sha256": "dd657cca56ec44dd7fd65b4a45927786e4e900560ee0cff1e4be1aa00a650ceb",
+      "cache_path": "data/processed/fragment_view_diversity_screen_20261018_v1/ec50_size/views3"
+    },
+    "ki_assay": {
+      "raw_path": "data/raw/drugood/lbap_core_ki_assay.json",
+      "raw_sha256": "70c5e180ff3c787e32ceba02a945de1dd1a06c2ba6a9e9959346679c96ac6ae4",
+      "cache_path": "data/processed/fragment_tuning_20261018_v1/ki_assay/views3"
+    },
+    "ki_scaffold": {
+      "raw_path": "data/raw/drugood/lbap_core_ki_scaffold.json",
+      "raw_sha256": "376a540de8dd1eb1830c7a4176a350fbbaa7eae9253fd133fe003449d2af94af",
+      "cache_path": "data/processed/fragment_tuning_20261018_v1/ki_scaffold/views3"
+    },
+    "ki_size": {
+      "raw_path": "data/raw/drugood/lbap_core_ki_size.json",
+      "raw_sha256": "b70978524a8e2cf1d10671a341290ee760ed04070088d3d78d21f401b82e27fb",
+      "cache_path": "data/processed/fragment_tuning_20261018_v1/ki_size/views3"
+    }
+  }
+}

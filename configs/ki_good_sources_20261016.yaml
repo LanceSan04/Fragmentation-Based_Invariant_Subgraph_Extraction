@@ -1,0 +1,62 @@
+schema: 1
+datasets:
+  ki_scaffold:
+    raw_sha256: 376a540de8dd1eb1830c7a4176a350fbbaa7eae9253fd133fe003449d2af94af
+    splits:
+      train:
+        molecules: 5323
+        negative: 38
+        positive: 5285
+      ood_val:
+        molecules: 4663
+        negative: 76
+        positive: 4587
+      ood_test:
+        molecules: 4668
+        negative: 289
+        positive: 4379
+  ki_size:
+    raw_sha256: b70978524a8e2cf1d10671a341290ee760ed04070088d3d78d21f401b82e27fb
+    splits:
+      train:
+        molecules: 8481
+        negative: 82
+        positive: 8399
+      ood_val:
+        molecules: 4644
+        negative: 76
+        positive: 4568
+      ood_test:
+        molecules: 4471
+        negative: 277
+        positive: 4194
+  good_hiv_scaffold:
+    raw_sha256: 767eebf62bda13a96da9507ec80391adfd2bf3f1b33aaff1f8ff3064aaaed4ee
+    splits:
+      train:
+        molecules: 24682
+        negative: 23758
+        positive: 924
+      ood_val:
+        molecules: 4113
+        negative: 3987
+        positive: 126
+      ood_test:
+        molecules: 4108
+        negative: 4027
+        positive: 81
+  good_hiv_size:
+    raw_sha256: 767eebf62bda13a96da9507ec80391adfd2bf3f1b33aaff1f8ff3064aaaed4ee
+    splits:
+      train:
+        molecules: 26169
+        negative: 25177
+        positive: 992
+      ood_val:
+        molecules: 2773
+        negative: 2717
+        positive: 56
+      ood_test:
+        molecules: 3961
+        negative: 3898
+        positive: 63

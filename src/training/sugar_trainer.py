@@ -471,7 +471,7 @@ class SuGARTrainer:
                 per_view.append({"predictions": pred})
         return per_view
 
-    def train_epoch(self, train_loader, return_loss_components=False):
+    def train_epoch(self, train_loader, return_loss_components=False, *, trace=None):
         """Train all FragmentCIGA views for one epoch."""
         for view in self.views:
             view.train()
@@ -488,15 +488,21 @@ class SuGARTrainer:
 
         pbar = tqdm(train_loader, desc="Training")
         for step, batch in enumerate(pbar):
+            if trace is not None:
+                trace(step, "batch", batch)
             batch = batch.to(self.device)
             labels = self._labels_from_batch(batch)
             per_view = self._forward_views(batch, use_aux)
+            if trace is not None:
+                trace(step, "forward", per_view)
 
             batch_env = None
             if use_env:
                 batch_env = batch.env_id.to(self.device)
 
             loss, components, _ = self._compute_components(per_view, labels, batch_env)
+            if trace is not None:
+                trace(step, "loss", {"total": loss, **components})
 
             if step == 0 and getattr(self, "log_gradient_influence", False):
                 self.last_gradient_report = {}
@@ -527,10 +533,16 @@ class SuGARTrainer:
             for opt in self.optimizers:
                 opt.zero_grad()
             loss.backward()
+            if trace is not None:
+                trace(step, "gradients", None)
             for view in self.views:
                 torch.nn.utils.clip_grad_norm_(view.parameters(), max_norm=1.0)
+            if trace is not None:
+                trace(step, "clipped_gradients", None)
             for opt in self.optimizers:
                 opt.step()
+            if trace is not None:
+                trace(step, "update", None)
 
             total_loss += float(loss.detach().item())
             for key, value in components.items():

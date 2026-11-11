@@ -29,16 +29,27 @@ def checkpoint_selection_metadata(payload):
     config's inference_policy. Missing metadata is not evidence of shared
     selection, even though shared is the model's legacy inference default.
     """
-    policy = (payload.get("config") or {}).get("inference_policy")
+    config = payload.get("config") or {}
+    policy = config.get("inference_policy")
+    rule = config.get("checkpoint_selection_rule", "unknown")
+    if rule == "final":
+        return {
+            "checkpoint_selection": "final fixed epoch; no validation checkpoint selection",
+            "checkpoint_selection_policy": "none",
+            "checkpoint_selection_rule": "final",
+            "checkpoint_selection_source": "checkpoint.config.checkpoint_selection_rule",
+        }
     if policy not in ("shared", "independent"):
         return {
             "checkpoint_selection": "unknown validation selection policy",
             "checkpoint_selection_policy": "unknown",
+            "checkpoint_selection_rule": rule,
             "checkpoint_selection_source": None,
         }
     return {
         "checkpoint_selection": f"original {policy}-graph validation selection",
         "checkpoint_selection_policy": policy,
+        "checkpoint_selection_rule": rule,
         "checkpoint_selection_source": "checkpoint.config.inference_policy",
     }
 

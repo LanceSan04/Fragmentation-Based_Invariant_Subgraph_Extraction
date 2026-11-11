@@ -13,6 +13,11 @@ from src.training.pipeline import Config, run_training
 
 
 class FollowupTests(unittest.TestCase):
+    def test_final_epoch_does_not_claim_validation_selection(self):
+        result = checkpoint_selection_metadata({"config": {
+            "inference_policy": "independent", "checkpoint_selection_rule": "final"}})
+        self.assertEqual(result["checkpoint_selection_policy"], "none")
+        self.assertEqual(result["checkpoint_selection_rule"], "final")
     def test_selection_metadata_uses_saved_policy(self):
         for policy in ("shared", "independent"):
             with self.subTest(policy=policy):

@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "epochs": 150,
+  "requested_seeds": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "source_results": "outputs/cross_domain/ec50_replication_sharing_20261031_v2/results/static",
+  "source_completed_sha256": "b446c541b8fe0258ca3c7c0956a468175db599343233f2a640ef7a481656dacf",
+  "reference_protocol": "configs/official_original_tuning_20261030.json",
+  "reference_protocol_sha256": "9762c0b669a14dad50c946a3db9614fd10446b6cf358ad14e4dc31145a791564",
+  "fixed_recipes": {
+    "ec50_assay": 1,
+    "ec50_scaffold": 2,
+    "ec50_size": 2
+  },
+  "top_by_dataset": {
+    "ec50_assay": [
+      {
+        "seed": 11422,
+        "original_test_auc": 0.7902259961740404
+      },
+      {
+        "seed": 11420,
+        "original_test_auc": 0.7886081037079247
+      },
+      {
+        "seed": 11409,
+        "original_test_auc": 0.7882044785434218
+      },
+      {
+        "seed": 11415,
+        "original_test_auc": 0.7868324921649233
+      },
+      {
+        "seed": 11408,
+        "original_test_auc": 0.7861999199533286
+      }
+    ],
+    "ec50_scaffold": [
+      {
+        "seed": 11413,
+        "original_test_auc": 0.6968818897637796
+      },
+      {
+        "seed": 11403,
+        "original_test_auc": 0.6933146325459317
+      },
+      {
+        "seed": 11409,
+        "original_test_auc": 0.6886902887139108
+      },
+      {
+        "seed": 11414,
+        "original_test_auc": 0.6871394356955379
+      },
+      {
+        "seed": 11401,
+        "original_test_auc": 0.6858435039370079
+      }
+    ],
+    "ec50_size": [
+      {
+        "seed": 11401,
+        "original_test_auc": 0.6796837202313875
+      },
+      {
+        "seed": 11413,
+        "original_test_auc": 0.6769386221921718
+      },
+      {
+        "seed": 11430,
+        "original_test_auc": 0.6738667267673353
+      },
+      {
+        "seed": 11427,
+        "original_test_auc": 0.6733686424761474
+      },
+      {
+        "seed": 11428,
+        "original_test_auc": 0.672651190744497
+      }
+    ]
+  },
+  "training_runs": 30,
+  "selected_reruns_are_reproducibility_only": true
+}

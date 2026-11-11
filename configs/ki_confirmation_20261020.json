@@ -1,0 +1,54 @@
+{
+  "schema": 2,
+  "epochs": 150,
+  "seeds": [
+    10801,
+    10802,
+    10803,
+    10804,
+    10805
+  ],
+  "search_config_sha256": "f9f4378baed2ad2e68e99911dec1cd3252f4b4acb649bb0112da2a71d5036aa4",
+  "candidates": [
+    {
+      "dataset": "ki_assay",
+      "recipe": 1,
+      "parameters": {
+        "learning_rate": 0.0003,
+        "edge_ratio": 0.5,
+        "fragment_sample_ratio": 0.7,
+        "lambda_contrast": 2
+      }
+    },
+    {
+      "dataset": "ki_scaffold",
+      "recipe": 12,
+      "parameters": {
+        "learning_rate": 0.001,
+        "edge_ratio": 0.9,
+        "fragment_sample_ratio": 0.7,
+        "lambda_contrast": 0
+      }
+    },
+    {
+      "dataset": "ki_size",
+      "recipe": 3,
+      "parameters": {
+        "learning_rate": 0.001,
+        "edge_ratio": 0.7,
+        "fragment_sample_ratio": 0.9,
+        "lambda_contrast": 0.1
+      }
+    }
+  ],
+  "search_status_paths": {
+    "ki_assay": "outputs/cross_domain/ki_bounded_search_20261019_v1/results/status.json",
+    "ki_scaffold": "outputs/cross_domain/ki_bounded_search_20261019_v1/results/status.json",
+    "ki_size": "outputs/cross_domain/ki_bounded_search_20261019_v1/results/status.json"
+  },
+  "search_status_sha256": {
+    "ki_assay": "bd5fe55046ba2922f30ba2812e4f7878ec881d482d96e1f6c32d22a567cf357a",
+    "ki_scaffold": "bd5fe55046ba2922f30ba2812e4f7878ec881d482d96e1f6c32d22a567cf357a",
+    "ki_size": "bd5fe55046ba2922f30ba2812e4f7878ec881d482d96e1f6c32d22a567cf357a"
+  }
+}

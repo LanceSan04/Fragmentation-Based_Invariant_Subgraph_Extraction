@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checkpoint": "outputs/cross_domain/ec50_transition_20261029_v1/results/official_full/ec50_size/scorer_and_classifier/seed11215/best_independent.pt",
+  "checkpoint_sha256": "29c4c8648c4637ed3b9fa8f5f3e4eea33a9a3ac5b9825d72968f09d7ab9652a2",
+  "cache": "data/processed/drugood_official_chembl30_20261028/ec50_size/views3",
+  "validation_cache_sha256": "571bbd44f24656a2335a6b62294c330b7ba634602a5b1e36b8d5533aa236a967",
+  "reference_predictions": "outputs/cross_domain/ec50_transition_20261029_v1/results/official_full/ec50_size/scorer_and_classifier/seed11215/validation_predictions.npz",
+  "reference_predictions_sha256": "278ab95d74d8ec9c918d30bd4f5f70d163defbb45261f11e7e3bcd30ea55a9e4",
+  "seed": 11215,
+  "batch_size": 64,
+  "repeats": 3,
+  "torch_threads": 48,
+  "expected_selected_epoch": 141,
+  "expected_epoch_auc": 0.7809093060080448,
+  "scope": "Validation only; fresh float32 model restoration before every pass; record all outcomes. No tolerance change, training, test loading, retry or pipeline continuation."
+}
