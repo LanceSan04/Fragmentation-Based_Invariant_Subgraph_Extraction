@@ -1,197 +1,85 @@
 # Fragment-based invariant subgraph learning for molecular OOD prediction
 
-This project combines **SuGAr** (an ensemble of CIGA-style subgraph learners) with
-**Group Graph fragmentation**. Each molecule is split into chemically meaningful
-fragments; a learned scorer selects fragment connections; the selected fragments are
-rebuilt into an atom-level subgraph; and a GNN classifies the molecule from that
-subgraph. Several such "views" are trained and their predictions are averaged.
+This project studies whether selecting chemical fragments helps a model predict molecular activity under distribution shift. It uses a SuGAr-inspired ensemble of CIGA-style subgraph learners.
 
-Datasets: DrugOOD LBAP-core EC50 (assay, scaffold and size splits) and GOOD-HIV.
+1. Preprocessing converts each molecule to an atom graph and builds one or more fragment graph representations.
+2. Each model view scores connections between fragments and selects a subgraph.
+3. The selected structure is reconstructed at the atom level and classified by a GNN.
+4. The ensemble combines view predictions. Shared inference uses a common selected graph, while independent inference lets each view select its own graph.
 
-## Setup
+## Setup and data
+
+Use Python 3.9 with the pinned Torch, PyTorch Geometric, and RDKit versions in [requirements.txt](requirements.txt). The examples below assume the environment is active and the current directory is the repository root.
 
 ```bash
 python -m venv .venv
-.venv/Scripts/python.exe -m pip install -r requirements.txt     # Windows
-# source .venv/bin/activate && pip install -r requirements.txt  # Linux/macOS
+# Linux/macOS
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 ```
 
-Raw data goes in `data/raw/` (`data/raw/drugood/lbap_core_ec50_*.json`,
-`data/raw/good/GOODHIV.zip`). Processed graph caches are written to `data/processed/`
-and results to `outputs/`; both are git-ignored.
+On Windows PowerShell, activate with `.\.venv\Scripts\Activate.ps1` or use `.\.venv\Scripts\python.exe` in place of `python`.
 
-## Running
-
-Everything runs through `main.py`.
-
-```bash
-python main.py smoke                                   # 1-minute synthetic end-to-end check
-python main.py preprocess --config configs/experiment.yaml
-python main.py train      --config configs/experiment.yaml
-python main.py eval       path/to/best_model.pt --config configs/experiment.yaml
-```
-
-| Command | Purpose |
+| Dataset and protocol | Input and version |
 |---|---|
-| `preprocess`, `train`, `resume`, `eval`, `full` | Build caches, train an ensemble, evaluate a checkpoint |
-| `search`, `search-eval` | Optuna hyperparameter search and repeated evaluation (`configs/grid_search.yaml`) |
-| `experiment select` | Multi-seed comparison of the learned model, random-selection control and ERM on one dataset |
-| `experiment cross-domain` | Same three arms across EC50 scaffold/size and GOOD-HIV, test evaluated once after validation |
-| `experiment tune` | Bounded hyperparameter search for the fragment model |
-| `experiment compare-inference`, `compare-views` | Shared vs independent inference; per-view overlap and agreement |
-| `experiment selection-gating-probe` | Frozen-checkpoint test of learned vs random ranking and gating |
-| `experiment visualize-views`, `diagnose` | Molecule galleries of selected subgraphs; gradient/domain diagnostics |
-| `diagnostics fragments\|losses\|subgraphs`, `inspect` | Fragmentation statistics, loss curves, subgraph analysis, cache inspection |
-| `tool <name>` | Fragment figures, fragment structure audit, view overlap, within-assay AUC, DrugOOD provenance |
+| DrugOOD EC50 and IC50, later tuning and confirmation | Use the downloaded ChEMBL30 LBAP-core JSONs under `data/raw/drugood_official_chembl30_20261028/`. The [tuning protocol](configs/official_original_tuning_20261030.json) records exact paths and SHA-256 hashes for assay, scaffold, and size. IC50 is a historical study. |
+| DrugOOD Ki, downloaded-data transfer and readout studies | Use the ChEMBL30 LBAP-core Ki JSONs under the same versioned directory. The [Ki input helper](src/experiments/original_tuning.py) pins each split file hash. |
+| DrugOOD EC50 and Ki, earlier studies | These used ChEMBL29-derived inputs under `data/raw/drugood/`. Some basenames match the downloaded files, but the contents and split membership differ. The standard `experiment.yaml` points at the earlier EC50 Assay path. |
+| GOOD-HIV | Place the published `GOODHIV.zip` under `data/raw/good/`. The [adapter](src/data/good_hiv.py) pins the archive hash and reads the predefined covariate splits for the configured domain. |
 
-Add `--help` to any command for its options, and `--smoke` to `select`, `cross-domain`, `tune` or `diagnose`
-for a fast synthetic run.
+DrugOOD preprocessing preserves the membership in the input split file. A training seed controls training randomness and the order of examples within the training split. The default DrugOOD run uses `ood_val` for selection and `ood_test` for final reporting. For a recorded experiment, verify the raw file hash against its protocol and keep the processed cache tied to that version.
 
-### Model variants
-
-Set in the config (or via the `experiment` workflows):
-
-- **Learned** (default): learned fragment-connection ranking and learned message gates.
-- **Random control**: `selection_mode: random` selects the same number of connections at random.
-- **ERM**: `erm_baseline: true` classifies the full molecule, no fragmentation.
-- Options: `selection_budget: atoms` (target share of atoms), `scoring_mode: symmetric`,
-  `inference_policy: shared | independent`, `contrast_scope: pooled | per_view`.
-
-## Layout
-
-```
-main.py                 command-line entry point
-configs/                experiment.yaml (documented defaults), reference_assay.yaml (frozen recipe),
-                        cross_domain_reference.yaml, search/smoke/diagnostic bases, ERM/fragment controls
-src/data/               DrugOOD/GOOD loading, featurization, preprocessing and loaders
-src/fragmentation/      Group Graph, BRICS and RECAP fragmentation
-src/models/             fragment scorer, selection, atom reconstruction, classifier, ensemble
-src/losses/             supervised contrastive, diversity, IRM
-src/training/           trainer, checkpoint selection, training/evaluation pipeline
-src/evaluation/         rationale metrics, within-assay (grouped) AUC
-src/experiments/        multi-seed / cross-dataset workflows behind `main.py experiment`
-src/analysis/           diagnostics, visualizations and data audits behind `main.py tool`
-tests/                  unit tests: python -m unittest discover -s tests
-tools/remote/           SSH, release and job-launch helpers for the shared GPU server
-```
-
-## Notes on evaluation
-
-DrugOOD EC50 labels are a single potency threshold applied across many assays, so pooled
-ROC-AUC is dominated by differences between assays. Report within-assay AUC
-(`main.py tool assay-groups`) alongside pooled AUC, and compare the learned model against the
-random-selection control at the same selection budget.
-
-## Selection-learning and granularity checks
-
-The historical model still uses `selection_estimator: hard` by default.
-`selection_estimator: straight_through` is experimental: hard membership in
-the training forward pass, a budget-constrained sigmoid surrogate backward,
-and ordinary hard reconstruction at evaluation. `selection_temperature`
-defaults to 0.1. Active atoms alone contribute to both classifier BatchNorm
-locations. Training retains full graph tensors, so memory and runtime need
-a representative pilot. This is not proof of improved OOD generalization.
-
-`view_fragmentations: {atom: 5}` selects the singleton control: one fragment
-per atom, original bonds as connections, no internal fragment bonds. Caches
-must be separate from Group Graph. Same connection ratio does not guarantee
-the same atom retention. As in the historical reconstruction, edgeless
-molecules retain all atoms, while isolated atoms in molecules that have
-connections are omitted unless selected through a connection (which is
-impossible for a truly isolated atom). This policy is recorded rather than
-silently changed in the control.
-
-Local synthetic checks, using fresh output paths:
+## Run through `main.py`
 
 ```bash
-python main.py experiment select --smoke --device cpu --fragmentation atom --selection-estimator straight_through --compare-checkpoint-rules --report-within-assay --output-dir outputs/smoke/selection_check
-python main.py experiment granularity --smoke --device cpu --datasets ec50_scaffold --evaluate-test --output-dir outputs/smoke/granularity_check
-python main.py experiment motif-check --epochs 30 --output-dir outputs/smoke/motif_check
+python main.py smoke --device cpu
+python main.py full --config configs/experiment.yaml --validate-loaders
+python main.py eval path/to/best_model.pt --config path/to/effective_config.yaml --splits ood_test
 ```
 
-The `select` checkpoint comparison is opt-in. It saves best raw validation
-AUC, final epoch, and best complete five-epoch trailing-average AUC (endpoint
-weights, no weight averaging). Ties retain the earliest epoch. Within-assay
-AUC is reported only for groups with at least five examples of each class;
-macro AUC, pair-weighted AUC, and coverage are logged. It never selects a
-checkpoint. Synthetic examples lack assay metadata, so this metric is null.
+The smoke command uses a tiny synthetic fixture and temporary files. For real data, use `full` to preprocess and train in one invocation, or `preprocess` and `train` separately to reuse caches. Use `resume` to continue from a saved checkpoint. For evaluation, supply the effective config and cache associated with the checkpoint.
 
-`granularity` compares fragment/atom x learned/random with paired seeds,
-independent validation/inference, all three checkpoint rules, and a primary
-validation difference of learned-minus-random advantages across representations.
-Defaults: EC50 Scaffold and Size, five seeds, 100 epochs, contrastive 0.1,
-diversity/IRM off. Optional GOOD-HIV Scaffold expands the budget. Prepare
-fresh caches with `--stage prepare`; train with the same paths after checking
-the plan with `--dry-run`. All checkpoints are frozen and validation replayed
-before optional `--evaluate-test` loads any test split. Reports include the
-per-seed interaction; they do not automatically declare success. Agree on a
-success threshold and compute budget before real training. Failure wording:
-"A learned-selection advantage was not established under this protocol."
+| Task | Command to start with |
+|---|---|
+| Find workflows and their options | `python main.py experiment --help` |
+| Search hyperparameters | `python main.py search --config configs/grid_search.yaml --dry-run` |
+| Retrain and evaluate the search winner | `python main.py search-eval --config configs/grid_search.yaml --params path/to/best_params.json --dry-run` |
+| Compare the learned model, random selection, and full-graph ERM | `python main.py experiment select --help` |
+| Compare those models across datasets | `python main.py experiment cross-domain --help` |
+| Inspect the recorded EC50 replication protocol | `python main.py experiment ec50-replication --help` |
+| Inspect the original Ki Assay readout pilot | `python main.py experiment ki-readout --help` |
+| Compare inference policies or inspect view overlap | `python main.py experiment compare-inference --help` and `python main.py experiment compare-views --help` |
+| Render molecular subgraph galleries | `python main.py experiment visualize-views --help` |
+| Check fragmentation, losses, or an existing cache | `python main.py diagnostics --help` and `python main.py inspect --help` |
+| Find data audits and visualization tools | `python main.py tool --help` |
 
-The motif check uses carbonyl presence on a small set of real molecular
-structures with synthetic labels and training label noise. It reports loss,
-scorer gradients, within-molecule score ranges, held-out motif-fragment
-retention, and atom retention for hard/ST/random arms. Its two positive
-held-out examples are an execution fixture, not a statistically powered
-learning demonstration. Expand the fixed fixture and seeds before treating
-motif recovery as a gate to real-data studies.
+The standard model ranks connections by learned scores and uses those scores to gate messages. Prediction gradients reach the scorer through the gates in the default hard-selection path. The random-selection control replaces the ranking with a seeded random ranking. ERM uses the full atom graph. For comparisons, record the selection budget, actual retained atoms and bonds, and the checkpoint and inference rules. Within-assay ROC-AUC can supplement pooled ROC-AUC for DrugOOD when enough assays contain both classes.
 
-For a larger fixed engineering check, use `experiment motif-check --expanded
---epochs 50 --seeds 23 24 25 26 27 --output-dir outputs/diagnostics/NEW_NAME`.
-This builds valid constructed molecular structures, balances motif presence,
-matches positive/negative atom counts, and removes canonical train/held-out
-duplicates. Held-out prefix families differ, but similar chemistry remains.
-The report includes exact uniform-random motif-retention probability to expose
-ceiling effects. Final epochs are evaluated; seeds/epochs are not selected
-against held-out performance. These labels are synthetic, not measured activity.
+## Configuration and results
 
-Granularity runs save wall time and CUDA peak allocated/reserved memory.
-Linux RSS is a process-lifetime high-water mark for the parent process;
-it does not include aggregate data-loader worker memory.
+- [configs/experiment.yaml](configs/experiment.yaml) defines the standard model, data, and artifact settings. [configs/grid_search.yaml](configs/grid_search.yaml) defines the generic Optuna search.
+- The remaining YAML and JSON files under `configs/` specify controls, fixtures, and recorded studies. Use the chosen workflow's help to find its config and prerequisites. The `tests/` directory contains verification fixtures and checks.
+- Standard runs write to `outputs/<dataset>/<fragmentation_recipe>/<run_name>/` when `output_root` is set. Look for `run_manifest.json`, `config/effective_config.yaml`, `checkpoints/best_model.pt`, and `final_evaluation_metrics.json`, as enabled.
+- When a study accepts `--output-dir`, give it a fresh path such as `outputs/<dataset>/<study>/<run-id>/`. Read its manifest or completion file to confirm which runs finished and whether test evaluation was enabled.
+- Keep processed graph caches under `data/processed/`. Cache location and preprocessing settings are part of the recipe for a rerun.
+- Set `deterministic_training: true` or use `--deterministic-training` on supported commands to request deterministic Torch operations. Operations without a deterministic implementation can still run and emit warnings. Record the device and software versions for repeated runs.
+- The native classifier uses `classifier_readout: mean` by default. The `sum` and `mean_count` options test alternative ways to combine atom embeddings. The optional `fragment_feature_mode: molecular_gnn` computes atom embeddings before selection. With `classifier_feature_mode: encoder` and hard cropping, the classifier also receives those embeddings for the retained atoms. The standard static recipe uses pooled input features for fragments and raw atom features for classification.
 
-## Licenses
+## Code layout and verification
 
-Group Graph and RelMole components: see `GROUP_GRAPH_LICENSE.md` and `RELMOLE_LICENSE.md`.
-# Experimental scorer pathways
+| Directory | Role |
+|---|---|
+| `src/data/`, `src/fragmentation/` | Dataset loading, atom and bond features, fragmentation, graph caches, and batching |
+| `src/models/`, `src/losses/` | Fragment scoring, selection, reconstruction, classification, ensembling, and training objectives |
+| `src/training/`, `src/evaluation/` | Training, checkpoint selection, prediction, and evaluation metrics |
+| `src/experiments/`, `src/analysis/` | Study protocols, analysis, and visualization behind the CLI |
 
-`main.py experiment scorer-paths` runs a fixed Scaffold comparison: the current
-hard selector with learned message weights, straight-through selection with
-learned or unit weights, and random ranking with learned or unit weights.
-The random arms use the same seeded ranking implementation. Unit weights in the
-straight-through arm preserve node/connection selection masks; they do not
-restore dropped bonds. Hard learned ranking with unit weights is rejected because
-it has no prediction-loss learning path for the scorer. Defaults elsewhere remain
-unchanged. `--smoke` checks all arms locally; `--stage evaluate --source-results ...`
-restores frozen checkpoints without retraining. Full runs require a verified cache,
-report three checkpoint rules and validation retention, and never select by test.
-# Prepared mentor study queue
+```bash
+python -m unittest discover -s tests -b
+```
 
-`python main.py experiment study-queue --dry-run --output-dir outputs/mentor_study`
-prints the draft budget in `configs/mentor_study_queue.yaml` without training.
-The native queue compares static fragment pooling with an optional
-`fragment_feature_mode: internal_gnn` encoder (GINE inside each fragment, then
-pooling), screens small/ramped diversity, and tunes contrastive strength using
-validation only. Confirmation seeds are disjoint; test never selects settings.
-The draft maximum is 198 training trajectories, including two short pilots.
-Use `--stage-limit pilot` for resource measurement before approving the sweep.
-`--resume` verifies completed jobs and resumes between jobs; it never retries
-failed/interrupted trajectories automatically. Queue status, per-job logs,
-configs, checkpoint rules, view diagnostics and final results live beneath the
-specified output folder. It stops on resource errors; independent transfer
-dataset branches can continue after a dataset-specific failure.
+Tests for local release and launch helpers skip when those helpers are absent. Unittest buffers output from passing tests and shows captured output when a test fails.
 
-This is our current pipeline, **not** the official SuGAr reproduction. The
-pinned reference and its outstanding compatibility work are documented in
-`baselines/sugar/REPRODUCTION.md`; upstream jobs are not silently substituted.
+The separate SuGAr reference in the research checkout uses a pinned upstream snapshot and compatibility adapters. Its environment, DrugOOD feature conventions, and evaluator are documented in `baselines/sugar/REPRODUCTION.md`. The native atom-only control and that reference are different experimental conditions.
 
-`python main.py experiment ki-reference-controls --project-root . --output-dir outputs/cross_domain/ki_reference_preview --stage full`
-prints the frozen Ki Scaffold/Size comparison without running it. It compares
-learned fragment ranking, random ranking with learned gates, prediction-only
-full-graph ERM, and the pinned SuGAr transfer reference. `--stage pilot` plans
-eight three-epoch validation-only trajectories; `--stage full` plans forty
-trajectories and validation-gated test evaluation. Both require `--execute` to
-run. See `docs/results/2026-10-24/ki_reference_controls_plan.md` for recipes,
-protocol differences, uncertainty, and the separate remote approval requirement.
-Real training additionally requires `--reference-python /path/to/reference/venv/bin/python`;
-the workflow verifies the reference imports before starting any model and uses
-that interpreter for reference training and evaluation. It installs nothing.
+Group Graph and RelMole attribution and license texts are in [GROUP_GRAPH_LICENSE.md](GROUP_GRAPH_LICENSE.md) and [RELMOLE_LICENSE.md](RELMOLE_LICENSE.md).

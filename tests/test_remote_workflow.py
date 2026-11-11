@@ -7,6 +7,11 @@ import types
 import unittest
 from unittest.mock import patch
 import zipfile
+
+REMOTE_TOOLS = Path(__file__).resolve().parents[1] / "tools" / "remote"
+if not all((REMOTE_TOOLS / name).is_file() for name in ("reu_release.py", "reu_remote_job.py")):
+    raise unittest.SkipTest("Local release and remote launcher tools are unavailable")
+
 from tools.remote import reu_release as release
 from tools.remote import reu_remote_job as job
 

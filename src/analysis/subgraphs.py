@@ -665,7 +665,7 @@ def _filter_summary_rows(name, rows, min_available):
 
 
 def build_fragment_interpretation_tables(fragment_rows, edge_rows, min_available=10, top_k=25):
-    """Build mentor-facing interpretation tables from raw selection metrics.
+    """Build interpretation tables from raw selection metrics.
 
     Raw metric CSVs stay complete. These tables apply a support filter so rare
     one-off fragments do not dominate interpretation.

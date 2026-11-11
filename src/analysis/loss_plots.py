@@ -1,19 +1,7 @@
 #!/usr/bin/env python
-"""Plot SuGAr/FragmentCIGA per-epoch loss CSV logs.
+"""Summarize and plot per-epoch loss CSVs written by the trainer.
 
-CLI arguments:
-    loss_log
-        Path to a CSV written by SuGARTrainer.
-
-CLI options:
-    --output-dir PATH
-        Directory for summary text and plots. Default:
-        reports/training_diagnostics.
-
-Example:
-    .\.venv\Scripts\python.exe scripts\plot_loss_logs.py ^
-        outputs/logs/sugar_training_losses.csv ^
-        --output-dir reports\training_diagnostics
+Run `python main.py diagnostics losses --help` for input and output paths.
 """
 
 import argparse

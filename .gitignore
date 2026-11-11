@@ -232,12 +232,32 @@ __marimo__/
 /outputs/
 /outputs_*/
 /final_testing_outputs/
+/reports/
 /logs/
 /temp/
+/state/
 
 # Local research notes, protocols and result write-ups (kept out of git)
 docs/
 
-/AGENTS.md
+# Local agent configuration, instructions, and remote launch helpers.
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.claude/
+.codex/
+.cursor/
+.cursorignore
+.cursorrules
+.mcp.json
+mcp.json
+/.github/copilot-instructions.md
+/.github/agents/
+/.github/instructions/
+/.github/prompts/
 /skills/
 /tools/
+
+# Local environment overrides and project-specific virtual environments.
+.env.*
+.venv-*/

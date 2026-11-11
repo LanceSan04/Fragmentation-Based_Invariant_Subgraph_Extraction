@@ -13,9 +13,9 @@
 # {output_dir}/{mode}/runs/{run_name}.json.
 #
 # Commands:
-#   .\.venv\Scripts\python.exe scripts\grid_search.py search --config configs\grid_search.yaml
-#   .\.venv\Scripts\python.exe scripts\grid_search.py eval   --config configs\grid_search.yaml
-#   .\.venv\Scripts\python.exe scripts\grid_search.py search --config configs\grid_search.yaml --dry-run
+#   python main.py search --config configs/grid_search.yaml --dry-run
+#   python main.py search --config configs/grid_search.yaml
+#   python main.py search-eval --config configs/grid_search.yaml
 
 # Base training config; every run starts from these defaults.
 base_config: configs/experiment.yaml

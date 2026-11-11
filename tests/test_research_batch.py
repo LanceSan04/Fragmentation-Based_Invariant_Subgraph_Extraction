@@ -22,7 +22,10 @@ class ResearchBatchTests(unittest.TestCase):
 
     def test_release_contains_every_pinned_reference_file(self):
         root=Path(__file__).resolve().parents[1]
-        spec=importlib.util.spec_from_file_location('release',root/'tools/remote/reu_release.py')
+        release_path = root / "tools" / "remote" / "reu_release.py"
+        if not release_path.is_file():
+            self.skipTest("Local release builder is unavailable")
+        spec = importlib.util.spec_from_file_location("release", release_path)
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
         bundled=module.files(root)
         for directory in ('upstream','drugood_reference'):

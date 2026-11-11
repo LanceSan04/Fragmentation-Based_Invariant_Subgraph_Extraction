@@ -1,36 +1,15 @@
 #!/usr/bin/env python
-r"""Optuna hyperparameter search + repeat evaluation for the SuGAr pipeline.
+"""Run Optuna validation search and repeat evaluation of its winner.
 
-Two modes, both driven by ``configs/grid_search.yaml`` and both wrapping the
-existing ``run_training`` from ``src.training.pipeline``:
+`python main.py search` scores each trial by its best moving-average
+validation AUC, averaged across repeats. It writes the leaderboard and
+best parameters. `python main.py search-eval` retrains the chosen
+configuration across seeds and reports test metrics. Both read
+configs/grid_search.yaml by default and save the effective config for
+each run.
 
-  search
-      Run an Optuna study that samples hyperparameters from the config ``grid``
-      (each list is a categorical choice). Each trial is scored by its best
-      ``auc_ma_window``-epoch moving-average VALIDATION AUC (averaged over
-      repeats). Every trial lands on a leaderboard CSV, then
-      ``best_params.json`` is written for the best trial.
-
-  eval
-      Load ``best_params.json`` (or an explicit ``--params`` file), run training
-      ``eval_runs`` times with different seeds, and write each run's TEST-split
-      result plus the final mean/std to ``eval_results.json``.
-
-Every training run gets a run name, and its full effective config is saved to
-``{output_dir}/{mode}/runs/{run_name}.json``. Heavy per-run training artifacts
-(checkpoints, run manifests, loss CSVs, diagnostics) are suppressed so a sweep
-stays light.
-
-During ``search``, pressing Ctrl+C once stops gracefully: the training run in
-flight finishes, a trial with incomplete repeats is pruned, the
-leaderboard/best-params snapshots are written, and the study halts (resume by
-re-running the same command). Pressing Ctrl+C a second time aborts immediately.
-
-Examples:
-    .\.venv\Scripts\python.exe scripts\grid_search.py search --config configs\grid_search.yaml
-    .\.venv\Scripts\python.exe scripts\grid_search.py search --config configs\grid_search.yaml --trials 20
-    .\.venv\Scripts\python.exe scripts\grid_search.py eval   --config configs\grid_search.yaml --runs 5
-    .\.venv\Scripts\python.exe scripts\grid_search.py eval   --config configs\grid_search.yaml --params outputs/search/default\search\best_params.json
+During search, the first Ctrl+C finishes the in-flight run, prunes an
+incomplete trial, and saves the search state. A second Ctrl+C aborts.
 """
 
 import argparse

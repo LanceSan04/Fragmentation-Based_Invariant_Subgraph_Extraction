@@ -1,62 +1,18 @@
 #!/usr/bin/env python
-r"""Consolidated CLI for the REU SuGAr-style molecular pipeline.
+"""Command-line entry point for fragment-based molecular OOD learning.
 
-This entrypoint orchestrates preprocessing, FragmentCIGA/SuGAr training,
-checkpoint resume/evaluation, processed-data inspection, and diagnostics.
-Most experiment behavior comes from configs/experiment.yaml; CLI flags are for
-small one-run overrides such as epochs, device, run_name, or disabling outputs.
-
-The ``full`` command is config-driven. It preprocesses, trains, and produces
-the artifacts enabled by ``save_outputs`` in the config. Disable individual
-artifacts for one run with flags such as ``--no-checkpoint``,
-``--no-training-curves``, or ``--no-subgraph-analysis``.
-
-When ``output_root`` is configured, run artifacts are consolidated under:
-
-    outputs/{dataset}/{fragmentation_recipe}/{run_name}/
-
-That run folder can contain checkpoints, training loss CSVs, final metrics,
-diagnostic outputs, the effective config, and run_manifest.json depending on
-``save_outputs``. Processed ``.pt`` split files stay under data/processed/...
-because they are reusable dataset artifacts.
+Use configs/experiment.yaml for a standard run. Subcommand --help lists
+one-run overrides. Workflow commands have their own study protocols.
 
 Examples:
-    # Run the configured full pipeline: preprocess, train, enabled outputs/diagnostics
-    .\.venv\Scripts\python.exe main.py full --config configs\experiment.yaml --validate-loaders
+    python main.py smoke --device cpu
+    python main.py full --config configs/experiment.yaml --validate-loaders
+    python main.py experiment --help
+    python main.py tool --help
 
-    # Run the same full pipeline but suppress selected artifacts for this run
-    .\.venv\Scripts\python.exe main.py full --config configs\experiment.yaml --no-checkpoint --no-training-curves
-
-    # Run the Optuna hyperparameter search (preprocesses first by default)
-    .\.venv\Scripts\python.exe main.py search --config configs\grid_search.yaml
-    .\.venv\Scripts\python.exe main.py search --config configs\grid_search.yaml --trials 20 --skip-preprocess
-
-    # Repeat-eval the search's chosen config on the test split (reuse processed data)
-    .\.venv\Scripts\python.exe main.py search-eval --config configs\grid_search.yaml --skip-preprocess
-
-    # Preprocess the configured dataset and validate PyG loaders
-    .\.venv\Scripts\python.exe main.py preprocess --config configs\experiment.yaml --validate-loaders
-
-    # Short CPU smoke training run using a named consolidated output folder
-    .\.venv\Scripts\python.exe main.py train --config configs\experiment.yaml --run-name smoke_cpu --epochs 1 --patience 1 --num-views 1 --hidden-dim 8 --gnn-layers 1 --batch-size 512 --device cpu --lambda-contrast 0 --lambda-diversity 0 --lambda-irm 0
-
-    # Evaluate a saved checkpoint without training
-    .\.venv\Scripts\python.exe main.py eval outputs\...\checkpoints\best_model.pt --config configs\experiment.yaml --splits ood_test iid_test --device cpu
-
-    # Resume training from a checkpoint
-    .\.venv\Scripts\python.exe main.py resume outputs\...\checkpoints\best_model.pt --config configs\experiment.yaml --epochs 5 --run-name resumed_run
-
-    # Run fragmentation diagnostics
-    .\.venv\Scripts\python.exe main.py diagnostics fragments data\processed\drugood_lbap_core_ec50_assay\group_graph --splits train ood_val ood_test --output-dir outputs\manual\group_graph_fragmentation_diagnostics
-
-    # Plot loss logs
-    .\.venv\Scripts\python.exe main.py diagnostics losses outputs\...\training_epoch_losses.csv --output-dir outputs\...\training_curves
-
-    # Analyze trained invariant subgraphs from a saved run config
-    .\.venv\Scripts\python.exe main.py diagnostics subgraphs --config outputs\...\config\effective_config.yaml --subgraph-split ood_test
-
-    # Inspect one processed molecule record
-    .\.venv\Scripts\python.exe main.py inspect data\processed\drugood_lbap_core_ec50_assay\group_graph --splits train --index 0
+With output_root set, standard run artifacts go under
+{output_root}/{dataset}/{fragmentation_recipe}/{run_name}/. Processed
+split caches are reusable and have their own configured location.
 """
 
 import argparse

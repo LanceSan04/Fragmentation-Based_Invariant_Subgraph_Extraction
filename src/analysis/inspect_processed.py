@@ -1,30 +1,8 @@
 #!/usr/bin/env python
-"""Inspect processed molecular .pt splits created by src/data/preprocess.py.
+"""Inspect a processed molecular split or directory of splits.
 
-CLI arguments:
-    path
-        Path to a processed .pt split file or a directory of split .pt files.
-
-CLI options:
-    --splits NAME [NAME ...]
-        Split names to inspect when path is a directory.
-    --index N
-        Molecule index to inspect. Default: 0.
-    --max-items N
-        Maximum list/dict items to print. Default: 8.
-    --max-chars N
-        Maximum characters for scalar/list previews. Default: 220.
-    --metadata-json
-        Print full metadata as JSON.
-    --full-lists
-        Print complete list/tensor values like the old snippet.
-    --all-fields
-        Also print a generic summary of every stored field.
-
-Examples:
-    .\.venv\Scripts\python.exe scripts\inspect_processed_pt.py data\processed\drugood_lbap_core_ec50_assay\group_graph\ood_val.pt --index 0
-    .\.venv\Scripts\python.exe scripts\inspect_processed_pt.py data\processed\drugood_lbap_core_ec50_assay\group_graph --splits train ood_val ood_test
-    .\.venv\Scripts\python.exe scripts\inspect_processed_pt.py data\processed\drugood_lbap_core_ec50_assay\group_graph\ood_val.pt --metadata-json --all-fields
+Run `python main.py inspect --help` for record indices, field previews,
+and metadata display options.
 """
 
 import argparse

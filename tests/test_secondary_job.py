@@ -5,6 +5,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+SECONDARY_LAUNCHER = Path(__file__).resolve().parents[1] / "tools" / "remote" / "reu_secondary_job.py"
+if not SECONDARY_LAUNCHER.is_file():
+    raise unittest.SkipTest("Local secondary launcher is unavailable")
+
 from tools.remote import reu_secondary_job as job
 
 
