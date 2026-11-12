@@ -57,6 +57,8 @@ The standard model ranks connections by learned scores and uses those scores to 
 
 ## Configuration and results
 
+See [initial benchmark results](results/README.md) for the EC50 tables and per-seed validation and test AUCs.
+
 - [configs/experiment.yaml](configs/experiment.yaml) defines the standard model, data, and artifact settings. [configs/grid_search.yaml](configs/grid_search.yaml) defines the generic Optuna search.
 - The remaining YAML and JSON files under `configs/` specify controls, fixtures, and recorded studies. Use the chosen workflow's help to find its config and prerequisites. The `tests/` directory contains verification fixtures and checks.
 - Standard runs write to `outputs/<dataset>/<fragmentation_recipe>/<run_name>/` when `output_root` is set. Look for `run_manifest.json`, `config/effective_config.yaml`, `checkpoints/best_model.pt`, and `final_evaluation_metrics.json`, as enabled.
